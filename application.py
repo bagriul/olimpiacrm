@@ -15,7 +15,7 @@ CORS(application)
 application.config['SECRET_KEY'] = config.SECRET_KEY
 SECRET_KEY = config.SECRET_KEY
 client = MongoClient(config.MONGO_STRING)
-db = client['size_crm']
+db = client['olimpia_crm']
 users_collection = db['users']
 statuses_collection = db['statuses']
 tasks_collection = db['tasks']
