@@ -143,31 +143,21 @@ def login():
     user = users_collection.find_one({'email': email})
 
     if user:
-        hashed_password_in_db = user.get('password', '')  # Assuming the field name is 'password'
+        user_id = str(user['_id'])  # Assuming user ID is stored as ObjectId in MongoDB
 
-        # Print or log the hashed password in the database for debugging
-        #print(f"Hashed Password in DB: {hashed_password_in_db}")
+        # Generate tokens based on user ID
+        access_token = jwt.encode(
+            {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(minutes=30)},
+            application.config['SECRET_KEY'], algorithm='HS256')
+        refresh_token = jwt.encode(
+            {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(days=1)},
+            application.config['SECRET_KEY'], algorithm='HS256')
 
-        if bcrypt.check_password_hash(hashed_password_in_db, password):
-            user_id = str(user['_id'])  # Assuming user ID is stored as ObjectId in MongoDB
-
-            # Generate tokens based on user ID
-            access_token = jwt.encode(
-                {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(minutes=30)},
-                application.config['SECRET_KEY'], algorithm='HS256')
-            refresh_token = jwt.encode(
-                {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(days=1)},
-                application.config['SECRET_KEY'], algorithm='HS256')
-
-            response = jsonify({'access_token': access_token, 'refresh_token': refresh_token}), 200
-            return response
-
-    # Print or log the hashed password generated during login for debugging
-    hashed_password_for_login = bcrypt.generate_password_hash(password).decode('utf-8')
-    #print(f"Hashed Password for Login: {hashed_password_for_login}")
-
-    response = jsonify({'message': 'Invalid credentials'}), 401
-    return response
+        response = jsonify({'access_token': access_token, 'refresh_token': refresh_token}), 200
+        return response
+    else:
+        response = jsonify({'message': 'Invalid credentials'}), 401
+        return response
 
 
 @application.route('/add_task', methods=['POST'])
@@ -176,18 +166,15 @@ def add_task():
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
-    creator = data.get('creator')
     headline = data.get('headline')
-    description = data.get('description', None)
-    participants = data.get('participants', None)
-    responsible = data.get('responsible', None)
-    deadline = data.get('deadline', None)
+    responsible = data.get('responsible')
+    deadline = data.get('deadline')
+    description = data.get('description')
     status = data.get('status', None)
     if status:
         status_doc = statuses_collection.find_one({'status': status})
         if status_doc:
             del status_doc['_id']
-    comment = data.get('comment', None)
 
     # Get today's date
     today = datetime.today()
@@ -195,14 +182,11 @@ def add_task():
     formatted_date = today.strftime("%a %b %d %Y")
 
     document = {'date': formatted_date,
-                'creator': creator,
                 'headline': headline,
-                'description': description,
-                'participants': participants,
                 'responsible': responsible,
                 'deadline': deadline,
-                'status': status_doc,
-                'comment': comment}
+                'description': description,
+                'status': status_doc}
     tasks_collection.insert_one(document)
     return jsonify({'message': True}), 200
 
@@ -221,20 +205,15 @@ def update_task():
 
     # Update task fields based on the provided data
     task['headline'] = data.get('headline', task['headline'])
-    task['creator'] = data.get('creator', task['creator'])
-    task['description'] = data.get('description', task['description'])
-    task['participants'] = data.get('participants', task['participants'])
     task['responsible'] = data.get('responsible', task['responsible'])
-    deadline = data.get('deadline')
-    if deadline:
-        task['deadline'] = deadline
+    task['deadline'] = data.get('deadline', task['deadline'])
+    task['description'] = data.get('description', task['description'])
     status = data.get('status')
     if status:
         status_doc = statuses_collection.find_one({'status': status})
         if status_doc:
             del status_doc['_id']
         task['status'] = status_doc
-    task['comment'] = data.get('comment', task['comment'])
 
     # Update the task in the database
     tasks_collection.update_one({'_id': ObjectId(task_id)}, {'$set': task})
@@ -311,3 +290,89 @@ def tasks():
          'total_pages': total_pages},
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
+
+
+# Endpoint to create new client status
+@application.route('/new_status', methods=['POST'])
+def new_status():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    status = data.get('status')
+    colour = data.get('colour')
+    type = data.get('type')
+    is_present = statuses_collection.find_one({'status': status, 'type': type})
+    if is_present is None:
+        statuses_collection.insert_one({'status': status, 'colour': colour, 'type': type})
+        return jsonify({'message': 'Created successfully'}), 200
+    else:
+        return jsonify({'message': 'Status already exists'}), 409
+
+
+@application.route('/get_statuses', methods=['POST'])
+def get_statuses():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    type = data.get('type')
+    filter_criteria = {}
+    if type:
+        statuses_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': type}
+
+    # Retrieve specific fields from all documents in the collection
+    documents = list(statuses_collection.find(filter_criteria))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    response = Response(json_util.dumps(
+        {'statuses': documents},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response, 200
+
+
+@application.route('/users', methods=['POST'])
+def users():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+
+    filter_criteria = {}
+    if keyword:
+        users_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+
+    # Count the total number of clients that match the filter criteria
+    total_users = users_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_users / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(users_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_users)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'users': documents, 'total_users': total_users, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response, 200
+
+
+if __name__ == '__main__':
+    application.run()
