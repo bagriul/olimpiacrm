@@ -227,8 +227,9 @@ def delete_task():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
 
-    task_id = data.get('task_id')
-    tasks_collection.find_one_and_delete({'_id': ObjectId(task_id)})
+    task_ids = data.get('task_ids')
+    for task_id in task_ids:
+        tasks_collection.find_one_and_delete({'_id': ObjectId(task_id)})
     return jsonify({'message': True}), 200
 
 
