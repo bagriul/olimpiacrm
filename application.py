@@ -19,6 +19,7 @@ db = client['olimpia_crm']
 users_collection = db['users']
 statuses_collection = db['statuses']
 tasks_collection = db['tasks']
+contracts_collection = db['contracts']
 
 bcrypt = Bcrypt(application)
 
@@ -31,6 +32,7 @@ def test():
 def decode_access_token(access_token, secret_key):
     try:
         payload = jwt.decode(access_token, secret_key, algorithms=['HS256'])
+        print(payload)
         return payload
     except jwt.ExpiredSignatureError:
         # Handle expired token
@@ -62,8 +64,7 @@ def verify_access_token(access_token):
             user = users_collection.find_one({'_id': ObjectId(user_id)})
             if user:
                 name = user['name']
-                userpic = user['userpic']
-                return jsonify({'name': name, 'userpic': userpic}), 200
+                return jsonify({'name': name}), 200
             # User is authenticated, proceed with processing the request
             else:
                 return jsonify({'message': 'User not found'}), 404
@@ -86,8 +87,7 @@ def verify_refresh_token(refresh_token):
             user = users_collection.find_one({'_id': ObjectId(user_id)})
             if user:
                 name = user['name']
-                userpic = user['userpic']
-                return jsonify({'name': name, 'userpic': userpic}), 200
+                return jsonify({'name': name}), 200
             # User is authenticated, proceed with processing the request
             else:
                 return jsonify({'message': 'User not found'}), 404
@@ -143,20 +143,51 @@ def login():
     user = users_collection.find_one({'email': email})
 
     if user:
-        user_id = str(user['_id'])  # Assuming user ID is stored as ObjectId in MongoDB
+        hashed_password_in_db = user.get('password', '')  # Assuming the field name is 'password'
 
-        # Generate tokens based on user ID
-        access_token = jwt.encode(
-            {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(minutes=30)},
-            application.config['SECRET_KEY'], algorithm='HS256')
-        refresh_token = jwt.encode(
-            {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(days=1)},
-            application.config['SECRET_KEY'], algorithm='HS256')
+        if bcrypt.check_password_hash(hashed_password_in_db, password):
+            user_id = str(user['_id'])  # Assuming user ID is stored as ObjectId in MongoDB
 
-        response = jsonify({'access_token': access_token, 'refresh_token': refresh_token}), 200
+            # Generate tokens based on user ID
+            access_token = jwt.encode(
+                {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(minutes=30)},
+                application.config['SECRET_KEY'], algorithm='HS256')
+            refresh_token = jwt.encode(
+                {'user_id': user_id, 'exp': datetime.utcnow() + timedelta(days=1)},
+                application.config['SECRET_KEY'], algorithm='HS256')
+
+            response = jsonify({'access_token': access_token, 'refresh_token': refresh_token}), 200
+            return response
+
+    response = jsonify({'message': 'Invalid credentials'}), 401
+    return response
+
+
+# Endpoint for user registration
+@application.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    name = data.get('name')
+    email = data.get('email')
+    password = data.get('password')
+
+    # Hash the password using bcrypt
+    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+
+    document = {
+        'name': name,
+        'email': email,
+        'password': hashed_password
+    }
+
+    is_present = users_collection.find_one({'email': email})
+
+    if (is_present is None) and (bcrypt.check_password_hash(hashed_password, password)):
+        users_collection.insert_one(document)
+        response = jsonify({'message': True}), 200
         return response
     else:
-        response = jsonify({'message': 'Invalid credentials'}), 401
+        response = jsonify({'message': False}), 401
         return response
 
 
@@ -373,6 +404,140 @@ def users():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
+
+
+@application.route('/add_contract', methods=['POST'])
+def add_contract():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    number = data.get('number')
+    counterpartie = data.get('counterpartie')
+    category = data.get('category')
+    date = data.get('date')
+    deadline = data.get('deadline')
+    subject = data.get('subject')
+    status = data.get('status', None)
+    if status:
+        status_doc = statuses_collection.find_one({'status': status})
+        if status_doc:
+            del status_doc['_id']
+
+    document = {'date': date,
+                'number': number,
+                'counterpartie': counterpartie,
+                'category': category,
+                'deadline': deadline,
+                'subject': subject,
+                'status': status_doc}
+    contracts_collection.insert_one(document)
+    return jsonify({'message': True}), 200
+
+
+@application.route('/update_contract', methods=['POST'])
+def update_contract():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    contract_id = data.get('contract_id')
+    contract = contracts_collection.find_one({'_id': ObjectId(contract_id)})
+    if contract is None:
+        return jsonify({'message': False}), 404
+
+    # Update task fields based on the provided data
+    contract['date'] = data.get('date', contract['date'])
+    contract['number'] = data.get('number', contract['number'])
+    contract['counterpartie'] = data.get('counterpartie', contract['counterpartie'])
+    contract['category'] = data.get('category', contract['category'])
+    contract['deadline'] = data.get('deadline', contract['deadline'])
+    contract['subject'] = data.get('subject', contract['subject'])
+    status = data.get('status')
+    if status:
+        status_doc = statuses_collection.find_one({'status': status})
+        if status_doc:
+            del status_doc['_id']
+        contract['status'] = status_doc
+
+    # Update the task in the database
+    contracts_collection.update_one({'_id': ObjectId(contract_id)}, {'$set': contract})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_contract', methods=['POST'])
+def delete_contract():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    contract_ids = data.get('contract_ids')
+    for contract_id in contract_ids:
+        contracts_collection.find_one_and_delete({'_id': ObjectId(contract_id)})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/contract_info', methods=['POST'])
+def contract_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    contract_id = data.get('contract_id')
+    object_id = ObjectId(contract_id)
+    contract_document = contracts_collection.find_one({'_id': object_id})
+
+    if contract_document:
+        # Convert ObjectId to string before returning the response
+        contract_document['_id'] = str(contract_document['_id'])
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(contract_document, default=str), 200, {'Content-Type': 'application/json'}
+    else:
+        response = jsonify({'message': 'Contract not found'}), 404
+        return response
+
+
+@application.route('/contracts', methods=['POST'])
+def contracts():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+
+    filter_criteria = {}
+    if keyword:
+        contracts_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+
+    # Count the total number of clients that match the filter criteria
+    total_contracts = contracts_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_contracts / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(contracts_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_contracts)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'contracts': documents, 'total_contracts': total_contracts, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response
 
 
 if __name__ == '__main__':
