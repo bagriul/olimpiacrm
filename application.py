@@ -322,6 +322,7 @@ def tasks():
          'total_pages': total_pages},
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
+    return response
 
 
 # Endpoint to create new client status
