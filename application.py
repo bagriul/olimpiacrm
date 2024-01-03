@@ -1,5 +1,5 @@
 import config
-from flask import Flask, jsonify, request, Response
+from flask import Flask, request, Response, send_file, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
 import jwt
@@ -8,6 +8,8 @@ from flask_bcrypt import Bcrypt
 from datetime import datetime, timedelta
 import json
 import math
+from gridfs import GridFS
+from io import BytesIO
 
 
 application = Flask(__name__)
@@ -20,6 +22,7 @@ users_collection = db['users']
 statuses_collection = db['statuses']
 tasks_collection = db['tasks']
 contracts_collection = db['contracts']
+fs = GridFS(db)
 
 bcrypt = Bcrypt(application)
 
@@ -539,6 +542,67 @@ def contracts():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response
+
+
+@application.route('/upload', methods=['POST'])
+def upload():
+    access_token = request.form.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    contract_id = request.form.get('contract_id')
+
+    if 'pdf_file' not in request.files:
+        return jsonify({'error': 'No PDF file provided'}), 400
+
+    pdf_file = request.files['pdf_file']
+
+    # Rest of your code remains unchanged
+    if pdf_file:
+        # Read file data into BytesIO buffer
+        file_data = BytesIO(pdf_file.read())
+        # Save the file to MongoDB using GridFS
+        file_id = fs.put(file_data, filename=pdf_file.filename)
+        # Update the scans field for the specified document in the contracts collection
+        contracts_collection.update_one(
+            {'_id': ObjectId(contract_id)},
+            {'$push': {'scans': file_id}}
+        )
+        return jsonify({'message': True}), 200
+
+
+def download(contract_id, file_id):
+    # Retrieve file from MongoDB using GridFS
+    file_data = fs.get(ObjectId(file_id))
+
+    if file_data is None:
+        return jsonify({'error': 'File not found'}), 404
+
+    # Set the appropriate response headers
+    response_headers = {
+        'Content-Disposition': f'inline; filename={file_data.filename}',
+        'Content-Type': 'application/pdf'
+    }
+
+    # Convert file data to BytesIO buffer
+    file_buffer = BytesIO(file_data.read())
+
+    # Return the file as a Flask response
+    return send_file(file_buffer, as_attachment=False, download_name=file_data.filename, mimetype='application/pdf', etag=False)
+
+
+@application.route('/get_files', methods=['POST'])
+def get_files():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    contract_id = data.get('contract_id')
+    file_id = data.get('file_id')
+    download_response = download(contract_id, file_id)
+
+    return download_response
 
 
 if __name__ == '__main__':
