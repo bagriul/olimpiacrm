@@ -590,10 +590,6 @@ def merchants_reports():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
     keyword = data.get('keyword')
-    shop_name = data.get('shop_name')
-    product_name = data.get('product_name')
-    product_amount = data.get('product_amount')
-    photo = data.get('photo')
     page = data.get('page', 1)  # Default to page 1 if not provided
     per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
 
@@ -601,19 +597,6 @@ def merchants_reports():
     if keyword:
         merchants_reports_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
-    if shop_name:
-        regex_pattern = f'.*{re.escape(shop_name)}.*'
-        filter_criteria['shop_name'] = {'$regex': regex_pattern, '$options': 'i'}
-    if product_name:
-        regex_pattern = f'.*{re.escape(product_name)}.*'
-        filter_criteria['product_name'] = {'$regex': regex_pattern, '$options': 'i'}
-    if product_amount:
-        regex_pattern = f'.*{re.escape(product_amount)}.*'
-        filter_criteria['product_amount'] = {'$regex': regex_pattern, '$options': 'i'}
-    if photo is True:
-        filter_criteria['photo'] = {'$ne': None}
-    if photo is False:
-        filter_criteria['photo'] = {'photo': {'$eq': None}}
 
     # Count the total number of clients that match the filter criteria
     total_reports = merchants_reports_collection.count_documents(filter_criteria)
@@ -637,6 +620,43 @@ def merchants_reports():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response
+
+
+@application.route('/merchants_reports_update', methods=['POST'])
+def merchants_reports_update():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    report_id = data.get('report_id')
+    report = merchants_reports_collection.find_one({'_id': ObjectId(report_id)})
+    if report is None:
+        return jsonify({'message': False}), 404
+
+    # Update task fields based on the provided data
+    report['shop_name'] = data.get('shop_name', report['shop_name'])
+    report['product_name'] = data.get('product_name', report['product_name'])
+    report['product_amount'] = data.get('product_amount', report['product_amount'])
+    report['sale_amount'] = data.get('sale_amount', report['sale_amount'])
+    report['photo'] = data.get('photo', report['photo'])
+
+    # Update the task in the database
+    merchants_reports_collection.update_one({'_id': ObjectId(report_id)}, {'$set': report})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/merchants_reports_delete', methods=['POST'])
+def merchants_reports_delete():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    reports_ids = data.get('reports_ids')
+    for report_id in reports_ids:
+        merchants_reports_collection.find_one_and_delete({'_id': ObjectId(report_id)})
+    return jsonify({'message': True}), 200
 
 
 if __name__ == '__main__':
