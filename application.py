@@ -1,5 +1,5 @@
 import config
-from flask import Flask, request, Response, send_file, jsonify
+from flask import Flask, request, Response, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
 import jwt
@@ -9,7 +9,10 @@ from datetime import datetime, timedelta
 import json
 import math
 from gridfs import GridFS
-from io import BytesIO
+import re
+import boto3
+from botocore.client import Config
+import io
 
 
 application = Flask(__name__)
@@ -22,6 +25,7 @@ users_collection = db['users']
 statuses_collection = db['statuses']
 tasks_collection = db['tasks']
 contracts_collection = db['contracts']
+merchants_reports_collection = db['merchants_reports']
 fs = GridFS(db)
 
 bcrypt = Bcrypt(application)
@@ -412,7 +416,7 @@ def users():
 
 @application.route('/add_contract', methods=['POST'])
 def add_contract():
-    data = request.get_json()
+    data = request.form
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
@@ -427,6 +431,8 @@ def add_contract():
         status_doc = statuses_collection.find_one({'status': status})
         if status_doc:
             del status_doc['_id']
+    scans_links = data.get('scans_links')
+    scans = request.files.getlist('scans')
 
     document = {'date': date,
                 'number': number,
@@ -434,14 +440,22 @@ def add_contract():
                 'category': category,
                 'deadline': deadline,
                 'subject': subject,
-                'status': status_doc}
+                'status': status_doc,
+                'scans_links': scans_links}
+    for scan in scans:
+        # Create an in-memory file-like object
+        file_stream = io.BytesIO()
+        scan.save(file_stream)
+        file_stream.seek(0)
+        # Upload the file directly to S3
+        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
     contracts_collection.insert_one(document)
     return jsonify({'message': True}), 200
 
 
 @application.route('/update_contract', methods=['POST'])
 def update_contract():
-    data = request.get_json()
+    data = request.form
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
@@ -464,6 +478,31 @@ def update_contract():
         if status_doc:
             del status_doc['_id']
         contract['status'] = status_doc
+    scans_links = data.get('scans_links')
+
+    if scans_links:
+        # Delete files not in new scans_links but present in old contract['scans_links']
+        for old_scan_link in contract['scans_links']:
+            if old_scan_link not in scans_links:
+                # Extract file key from the old_scan_link
+                file_key = old_scan_link.split('/')[-1]
+                config.s3_client.delete_object(Bucket='olimpiabucket', Key=f'contracts/{file_key}')
+
+        # Upload files in new scans_links but not in old contract['scans_links']
+        for new_scan_link in scans_links:
+            if new_scan_link not in contract['scans_links']:
+                scans = request.files.getlist('scans')
+                for scan in scans:
+                    # Create an in-memory file-like object
+                    file_stream = io.BytesIO()
+                    scan.save(file_stream)
+                    file_stream.seek(0)
+
+                    # Upload the file directly to S3
+                    config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
+
+        # Update contract['scans_links'] with the new scans_links
+        contract['scans_links'] = scans_links
 
     # Update the task in the database
     contracts_collection.update_one({'_id': ObjectId(contract_id)}, {'$set': contract})
@@ -544,65 +583,60 @@ def contracts():
     return response
 
 
-@application.route('/upload', methods=['POST'])
-def upload():
-    access_token = request.form.get('access_token')
-    if check_token(access_token) is False:
-        return jsonify({'token': False}), 401
-
-    contract_id = request.form.get('contract_id')
-
-    if 'pdf_file' not in request.files:
-        return jsonify({'error': 'No PDF file provided'}), 400
-
-    pdf_file = request.files['pdf_file']
-
-    # Rest of your code remains unchanged
-    if pdf_file:
-        # Read file data into BytesIO buffer
-        file_data = BytesIO(pdf_file.read())
-        # Save the file to MongoDB using GridFS
-        file_id = fs.put(file_data, filename=pdf_file.filename)
-        # Update the scans field for the specified document in the contracts collection
-        contracts_collection.update_one(
-            {'_id': ObjectId(contract_id)},
-            {'$push': {'scans': file_id}}
-        )
-        return jsonify({'message': True}), 200
-
-
-def download(contract_id, file_id):
-    # Retrieve file from MongoDB using GridFS
-    file_data = fs.get(ObjectId(file_id))
-
-    if file_data is None:
-        return jsonify({'error': 'File not found'}), 404
-
-    # Set the appropriate response headers
-    response_headers = {
-        'Content-Disposition': f'inline; filename={file_data.filename}',
-        'Content-Type': 'application/pdf'
-    }
-
-    # Convert file data to BytesIO buffer
-    file_buffer = BytesIO(file_data.read())
-
-    # Return the file as a Flask response
-    return send_file(file_buffer, as_attachment=False, download_name=file_data.filename, mimetype='application/pdf', etag=False)
-
-
-@application.route('/get_files', methods=['POST'])
-def get_files():
+@application.route('/merchants_reports', methods=['POST'])
+def merchants_reports():
     data = request.get_json()
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    shop_name = data.get('shop_name')
+    product_name = data.get('product_name')
+    product_amount = data.get('product_amount')
+    photo = data.get('photo')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
 
-    contract_id = data.get('contract_id')
-    file_id = data.get('file_id')
-    download_response = download(contract_id, file_id)
+    filter_criteria = {}
+    if keyword:
+        merchants_reports_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+    if shop_name:
+        regex_pattern = f'.*{re.escape(shop_name)}.*'
+        filter_criteria['shop_name'] = {'$regex': regex_pattern, '$options': 'i'}
+    if product_name:
+        regex_pattern = f'.*{re.escape(product_name)}.*'
+        filter_criteria['product_name'] = {'$regex': regex_pattern, '$options': 'i'}
+    if product_amount:
+        regex_pattern = f'.*{re.escape(product_amount)}.*'
+        filter_criteria['product_amount'] = {'$regex': regex_pattern, '$options': 'i'}
+    if photo is True:
+        filter_criteria['photo'] = {'$ne': None}
+    if photo is False:
+        filter_criteria['photo'] = {'photo': {'$eq': None}}
 
-    return download_response
+    # Count the total number of clients that match the filter criteria
+    total_reports = merchants_reports_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_reports / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(merchants_reports_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_reports)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'reports': documents, 'total_reports': total_reports, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response
 
 
 if __name__ == '__main__':
