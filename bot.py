@@ -22,6 +22,8 @@ bot = telebot.TeleBot(bot_token)
 main_menu_markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
 main_menu_markup.add(types.KeyboardButton("Звіт мерчандайзера"))
 
+print('Start')
+
 # Callback function for the /start command
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -47,10 +49,18 @@ def product_name(message):
     bot.reply_to(message, f"Яка кількість товару?")
     bot.register_next_step_handler(message, product_amount)
 
+
 # Callback function to collect the product amount
 def product_amount(message):
     global amount_product
     amount_product = message.text
+    bot.reply_to(message, 'Яка кількість акційного товару?')
+    bot.register_next_step_handler(message, sale_amount)
+
+
+def sale_amount(message):
+    global amount_sale
+    amount_sale = message.text
     bot.reply_to(message, f"Надішліть фото, або повідомлення 'скасувати'")
     bot.register_next_step_handler(message, photo)
 
@@ -76,6 +86,7 @@ def photo(message):
                           f"Назва торгової точки: {name_shop}\n"
                           f"Назва товару: {name_product}\n"
                           f"Кількість товару: {amount_product}\n"
+                          f"Кількість акційного товару: {amount_sale}\n"
                           "Якщо все гаразд, то натисніть 'Підтвердити', щоб надіслати інформацію", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.text.lower() in ['підтвердити', 'скасувати'])
@@ -86,7 +97,8 @@ def confirmation(message):
             'shop_name': name_shop,
             'product_name': name_product,
             'product_amount': amount_product,
-            'photo': photo_base64
+            'sale_amount': amount_sale,
+            'photo': [photo_base64]
         }
         collection.insert_one(data_to_save)
         bot.reply_to(message, "Інформація успішно надіслана")
