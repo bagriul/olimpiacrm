@@ -14,6 +14,7 @@ import boto3
 from botocore.client import Config
 import io
 from botocore.exceptions import ClientError
+import uuid
 
 
 application = Flask(__name__)
@@ -443,30 +444,31 @@ def add_contract():
                 'status': status_doc}
     scans_links_list = []
     for scan in scans:
-        def check_exists(filename):
-            bucket_name = 'olimpiabucket'
-            key = f'contracts/{filename}'  # Include the "/contracts" folder in the key
-
-            try:
-                config.s3_client.head_object(Bucket=bucket_name, Key=key)
-                return True
-            except ClientError as e:
-                if e.response['Error']['Code'] == '404':
-                    return False
-                else:
-                    raise
         # Create an in-memory file-like object
         file_stream = io.BytesIO()
         scan.save(file_stream)
         file_stream.seek(0)
 
-        file_exists = check_exists(scan.filename)
-        if file_exists is True:
-            return jsonify({'message': 'File already exists'}), 404
-        elif file_exists is False:
-            # Upload the file directly to S3
-            config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
-            scans_links_list.append(f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{scan.filename}')
+        def generate_unique_filename(original_filename):
+            # Get current timestamp
+            current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+
+            # Generate a unique identifier (UUID)
+            unique_identifier = str(uuid.uuid4())
+
+            # Extract the file extension from the original filename
+            file_extension = original_filename.rsplit('.', 1)[-1].lower()
+
+            # Combine timestamp, unique identifier, and file extension to create a unique filename
+            unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
+
+            return unique_filename
+
+        unique_filename = generate_unique_filename(scan.filename)
+
+        # Upload the file directly to S3
+        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}')
+        scans_links_list.append(f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{unique_filename}')
 
     document['scans_links'] = scans_links_list
     contracts_collection.insert_one(document)
@@ -513,30 +515,31 @@ def update_contract():
             if new_scan_link not in contract['scans_links']:
                 scans = request.files.getlist('scans')
                 for scan in scans:
-                    def check_exists(filename):
-                        bucket_name = 'olimpiabucket'
-                        key = f'contracts/{filename}'  # Include the "/contracts" folder in the key
-
-                        try:
-                            config.s3_client.head_object(Bucket=bucket_name, Key=key)
-                            return True
-                        except ClientError as e:
-                            if e.response['Error']['Code'] == '404':
-                                return False
-                            else:
-                                raise
 
                     # Create an in-memory file-like object
                     file_stream = io.BytesIO()
                     scan.save(file_stream)
                     file_stream.seek(0)
 
-                    file_exists = check_exists(scan.filename)
-                    if file_exists is True:
-                        return jsonify({'message': 'File already exists'}), 404
-                    elif file_exists is False:
-                        # Upload the file directly to S3
-                        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
+                    def generate_unique_filename(original_filename):
+                        # Get current timestamp
+                        current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+
+                        # Generate a unique identifier (UUID)
+                        unique_identifier = str(uuid.uuid4())
+
+                        # Extract the file extension from the original filename
+                        file_extension = original_filename.rsplit('.', 1)[-1].lower()
+
+                        # Combine timestamp, unique identifier, and file extension to create a unique filename
+                        unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
+
+                        return unique_filename
+
+                    unique_filename = generate_unique_filename(scan.filename)
+
+                    # Upload the file directly to S3
+                    config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}')
 
         if isinstance(scans_links, list):
             # Update contract['scans_links'] with the new scans_links
