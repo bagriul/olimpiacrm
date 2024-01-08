@@ -659,5 +659,27 @@ def merchants_reports_delete():
     return jsonify({'message': True}), 200
 
 
+@application.route('/merchant_report_info', methods=['POST'])
+def merchant_report_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    report_id = data.get('report_id')
+    object_id = ObjectId(report_id)
+    report_document = merchants_reports_collection.find_one({'_id': object_id})
+
+    if report_document:
+        # Convert ObjectId to string before returning the response
+        report_document['_id'] = str(report_document['_id'])
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(report_document, default=str), 200, {'Content-Type': 'application/json'}
+    else:
+        response = jsonify({'message': 'Report not found'}), 404
+        return response
+
+
 if __name__ == '__main__':
     application.run()
