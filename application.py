@@ -500,15 +500,18 @@ def update_contract():
         if status_doc:
             del status_doc['_id']
         contract['status'] = status_doc
-    scans_links = data.get('scans_links')
+    delete_scans = data.get('delete_scans')
 
-    if scans_links:
+    if delete_scans:
         # Delete files not in new scans_links but present in old contract['scans_links']
-        for old_scan_link in contract['scans_links']:
-            if old_scan_link not in scans_links:
+        for scan_link in contract['scans_links']:
+            if scan_link in delete_scans:
                 # Extract file key from the old_scan_link
-                file_key = old_scan_link.split('/')[-1]
+                file_key = scan_link.split('/')[-1]
                 config.s3_client.delete_object(Bucket='olimpiabucket', Key=f'contracts/{file_key}')
+                contracts_collection.find_one_and_update({'_id': ObjectId(contract_id)},
+                                                         {"$pull": {"scans_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{file_key}"}})
+
 
         scans = request.files.getlist('scans')
         for scan in scans:
@@ -536,13 +539,9 @@ def update_contract():
 
             # Upload the file directly to S3
             config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}')
+            contracts_collection.find_one_and_update({'_id': ObjectId(contract_id)},
+                                                     {"$push": {"scans_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{unique_filename}"}})
 
-        if isinstance(scans_links, list):
-            # Update contract['scans_links'] with the new scans_links
-            contract['scans_links'] = scans_links
-        else:
-            # Update contract['scans_links'] with the new scans_links
-            contract['scans_links'] = [scans_links]
 
     # Update the task in the database
     contracts_collection.update_one({'_id': ObjectId(contract_id)}, {'$set': contract})
