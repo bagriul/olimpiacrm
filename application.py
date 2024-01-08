@@ -440,7 +440,7 @@ def add_contract():
                 'deadline': deadline,
                 'subject': subject,
                 'status': status_doc}
-    filename_list = []
+    scans_links_list = []
     for scan in scans:
         # Create an in-memory file-like object
         file_stream = io.BytesIO()
@@ -448,12 +448,11 @@ def add_contract():
         file_stream.seek(0)
         # Upload the file directly to S3
         config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
-        filename_list.append(scan.filename)
+        scans_links_list.append(f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{scan.filename}')
 
-        #rewrite for few scans!!!
-        document['scans_links'] = f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{scan.filename}'
+    document['scans_links'] = scans_links_list
     contracts_collection.insert_one(document)
-    return jsonify({'message': scans}), 200
+    return jsonify({'message': True}), 200
 
 
 @application.route('/update_contract', methods=['POST'])
