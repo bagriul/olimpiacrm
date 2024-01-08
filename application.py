@@ -510,36 +510,32 @@ def update_contract():
                 file_key = old_scan_link.split('/')[-1]
                 config.s3_client.delete_object(Bucket='olimpiabucket', Key=f'contracts/{file_key}')
 
-        # Upload files in new scans_links but not in old contract['scans_links']
-        for new_scan_link in scans_links:
-            if new_scan_link not in contract['scans_links']:
-                scans = request.files.getlist('scans')
-                for scan in scans:
+        scans = request.files.getlist('scans')
+        for scan in scans:
+            # Create an in-memory file-like object
+            file_stream = io.BytesIO()
+            scan.save(file_stream)
+            file_stream.seek(0)
 
-                    # Create an in-memory file-like object
-                    file_stream = io.BytesIO()
-                    scan.save(file_stream)
-                    file_stream.seek(0)
+            def generate_unique_filename(original_filename):
+                # Get current timestamp
+                current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
 
-                    def generate_unique_filename(original_filename):
-                        # Get current timestamp
-                        current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+                # Generate a unique identifier (UUID)
+                unique_identifier = str(uuid.uuid4())
 
-                        # Generate a unique identifier (UUID)
-                        unique_identifier = str(uuid.uuid4())
+                # Extract the file extension from the original filename
+                file_extension = original_filename.rsplit('.', 1)[-1].lower()
 
-                        # Extract the file extension from the original filename
-                        file_extension = original_filename.rsplit('.', 1)[-1].lower()
+                # Combine timestamp, unique identifier, and file extension to create a unique filename
+                unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
 
-                        # Combine timestamp, unique identifier, and file extension to create a unique filename
-                        unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
+                return unique_filename
 
-                        return unique_filename
+            unique_filename = generate_unique_filename(scan.filename)
 
-                    unique_filename = generate_unique_filename(scan.filename)
-
-                    # Upload the file directly to S3
-                    config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}')
+            # Upload the file directly to S3
+            config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}')
 
         if isinstance(scans_links, list):
             # Update contract['scans_links'] with the new scans_links
