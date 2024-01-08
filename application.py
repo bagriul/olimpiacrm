@@ -13,6 +13,7 @@ import re
 import boto3
 from botocore.client import Config
 import io
+from botocore.exceptions import ClientError
 
 
 application = Flask(__name__)
@@ -442,13 +443,30 @@ def add_contract():
                 'status': status_doc}
     scans_links_list = []
     for scan in scans:
+        def check_exists(filename):
+            bucket_name = 'olimpiabucket'
+            key = f'contracts/{filename}'  # Include the "/contracts" folder in the key
+
+            try:
+                config.s3_client.head_object(Bucket=bucket_name, Key=key)
+                return True
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    return False
+                else:
+                    raise
         # Create an in-memory file-like object
         file_stream = io.BytesIO()
         scan.save(file_stream)
         file_stream.seek(0)
-        # Upload the file directly to S3
-        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
-        scans_links_list.append(f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{scan.filename}')
+
+        file_exists = check_exists(scan.filename)
+        if file_exists is True:
+            return jsonify({'message': 'File already exists'}), 404
+        elif file_exists is False:
+            # Upload the file directly to S3
+            config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
+            scans_links_list.append(f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{scan.filename}')
 
     document['scans_links'] = scans_links_list
     contracts_collection.insert_one(document)
@@ -495,16 +513,37 @@ def update_contract():
             if new_scan_link not in contract['scans_links']:
                 scans = request.files.getlist('scans')
                 for scan in scans:
+                    def check_exists(filename):
+                        bucket_name = 'olimpiabucket'
+                        key = f'contracts/{filename}'  # Include the "/contracts" folder in the key
+
+                        try:
+                            config.s3_client.head_object(Bucket=bucket_name, Key=key)
+                            return True
+                        except ClientError as e:
+                            if e.response['Error']['Code'] == '404':
+                                return False
+                            else:
+                                raise
+
                     # Create an in-memory file-like object
                     file_stream = io.BytesIO()
                     scan.save(file_stream)
                     file_stream.seek(0)
 
-                    # Upload the file directly to S3
-                    config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
+                    file_exists = check_exists(scan.filename)
+                    if file_exists is True:
+                        return jsonify({'message': 'File already exists'}), 404
+                    elif file_exists is False:
+                        # Upload the file directly to S3
+                        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
 
-        # Update contract['scans_links'] with the new scans_links
-        contract['scans_links'] = scans_links
+        if isinstance(scans_links, list):
+            # Update contract['scans_links'] with the new scans_links
+            contract['scans_links'] = scans_links
+        else:
+            # Update contract['scans_links'] with the new scans_links
+            contract['scans_links'] = [scans_links]
 
     # Update the task in the database
     contracts_collection.update_one({'_id': ObjectId(contract_id)}, {'$set': contract})
