@@ -503,8 +503,8 @@ def update_contract():
                     # Upload the file directly to S3
                     config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{scan.filename}')
 
-                    # Update contract['scans_links'] with the new scans_links
-                    contract['scans_links'] = f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{scan.filename}'
+        # Update contract['scans_links'] with the new scans_links
+        contract['scans_links'] = scans_links
 
     # Update the task in the database
     contracts_collection.update_one({'_id': ObjectId(contract_id)}, {'$set': contract})
