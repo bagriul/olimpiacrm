@@ -453,7 +453,7 @@ def add_contract():
         #rewrite for few scans!!!
         document['scans_links'] = f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{scan.filename}'
     contracts_collection.insert_one(document)
-    return jsonify({'message': filename_list}), 200
+    return jsonify({'message': scans}), 200
 
 
 @application.route('/update_contract', methods=['POST'])
