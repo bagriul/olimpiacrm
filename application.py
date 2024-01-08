@@ -467,7 +467,7 @@ def add_contract():
         unique_filename = generate_unique_filename(scan.filename)
 
         # Upload the file directly to S3
-        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}')
+        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}', ExtraArgs={'ACL': 'public-read'})
         scans_links_list.append(f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{unique_filename}')
 
     document['scans_links'] = scans_links_list
@@ -500,6 +500,8 @@ def update_contract():
         if status_doc:
             del status_doc['_id']
         contract['status'] = status_doc
+    contracts_collection.update_one({'_id': ObjectId(contract_id)}, {'$set': contract})
+
     delete_scans = data.get('delete_scans')
     scans = request.files.getlist('scans')
 
@@ -538,13 +540,10 @@ def update_contract():
             unique_filename = generate_unique_filename(scan.filename)
 
             # Upload the file directly to S3
-            config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}')
+            config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}', ExtraArgs={'ACL': 'public-read'})
             contracts_collection.find_one_and_update({'_id': ObjectId(contract_id)},
                                                      {"$push": {"scans_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{unique_filename}"}})
 
-
-    # Update the task in the database
-    contracts_collection.update_one({'_id': ObjectId(contract_id)}, {'$set': contract})
     return jsonify({'message': True}), 200
 
 
