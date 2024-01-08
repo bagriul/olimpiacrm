@@ -501,6 +501,7 @@ def update_contract():
             del status_doc['_id']
         contract['status'] = status_doc
     delete_scans = data.get('delete_scans')
+    scans = request.files.getlist('scans')
 
     if delete_scans:
         # Delete files not in new scans_links but present in old contract['scans_links']
@@ -512,8 +513,7 @@ def update_contract():
                 contracts_collection.find_one_and_update({'_id': ObjectId(contract_id)},
                                                          {"$pull": {"scans_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{file_key}"}})
 
-
-        scans = request.files.getlist('scans')
+    if scans:
         for scan in scans:
             # Create an in-memory file-like object
             file_stream = io.BytesIO()
