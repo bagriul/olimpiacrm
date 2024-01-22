@@ -28,7 +28,7 @@ statuses_collection = db['statuses']
 tasks_collection = db['tasks']
 contracts_collection = db['contracts']
 merchants_reports_collection = db['merchants_reports']
-fs = GridFS(db)
+clients_collection = db['clients']
 
 bcrypt = Bcrypt(application)
 
@@ -717,6 +717,223 @@ def merchant_report_info():
     else:
         response = jsonify({'message': 'Report not found'}), 404
         return response
+
+
+@application.route('/add_client', methods=['POST'])
+def add_client():
+    data = request.form
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    name = data.get('name')
+    edrpou = data.get('edrpou')
+    ipn = data.get('ipn')
+    bank = data.get('bank')
+    account_number = data.get('account_number')
+    address_jur = data.get('address_jur')
+    address_phiz = data.get('address_phiz')
+    address_sklad = data.get('address_sklad')
+    pib_kerivnyka = data.get('pib_kerivnyka')
+    pib_kontaktna = data.get('pib_kontaktna')
+    number = data.get('number')
+    email = data.get('email')
+    supervisors = []
+    contracts = request.files.getlist('contracts')
+
+    document = {'name': name,
+                'edrpou': edrpou,
+                'ipn': ipn,
+                'bank': bank,
+                'account_number': account_number,
+                'address_jur': address_jur,
+                'address_phiz': address_phiz,
+                'address_sklad': address_sklad,
+                'pib_kerivnyka': pib_kerivnyka,
+                'pib_kontaktna': pib_kontaktna,
+                'number': number,
+                'email': email,
+                'supervisors': supervisors}
+
+    contracts_links_list = []
+    for contract in contracts:
+        # Create an in-memory file-like object
+        file_stream = io.BytesIO()
+        contract.save(file_stream)
+        file_stream.seek(0)
+
+        def generate_unique_filename(original_filename):
+            # Get current timestamp
+            current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+
+            # Generate a unique identifier (UUID)
+            unique_identifier = str(uuid.uuid4())
+
+            # Extract the file extension from the original filename
+            file_extension = original_filename.rsplit('.', 1)[-1].lower()
+
+            # Combine timestamp, unique identifier, and file extension to create a unique filename
+            unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
+
+            return unique_filename
+
+        unique_filename = generate_unique_filename(contract.filename)
+
+        # Upload the file directly to S3
+        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts_clients/{unique_filename}',
+                                        ExtraArgs={'ACL': 'public-read'})
+        contracts_links_list.append(f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts_clients/{unique_filename}')
+
+    document['contracts_links'] = contracts_links_list
+
+    clients_collection.insert_one(document)
+    return jsonify({'message': True}), 200
+
+
+@application.route('/update_client', methods=['POST'])
+def update_client():
+    data = request.form
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    client_id = data.get('client_id')
+    client = clients_collection.find_one({'_id': ObjectId(client_id)})
+    if client is None:
+        return jsonify({'message': False}), 404
+
+    # Update task fields based on the provided data
+    client['name'] = data.get('name', client['name'])
+    client['edrpou'] = data.get('edrpou', client['edrpou'])
+    client['ipn'] = data.get('ipn', client['ipn'])
+    client['bank'] = data.get('bank', client['bank'])
+    client['account_number'] = data.get('account_number', client['account_number'])
+    client['address_jur'] = data.get('address_jur', client['address_jur'])
+    client['address_phiz'] = data.get('address_phiz', client['address_phiz'])
+    client['address_sklad'] = data.get('address_sklad', client['address_sklad'])
+    client['pib_kerivnyka'] = data.get('pib_kerivnyka', client['pib_kerivnyka'])
+    client['pib_kontaktna'] = data.get('pib_kontaktna', client['pib_kontaktna'])
+    client['number'] = data.get('number', client['number'])
+    client['email'] = data.get('email', client['email'])
+    client['supervisors'] = data.get('supervisors', client['supervisors'])
+    clients_collection.update_one({'_id': ObjectId(client_id)}, {'$set': client})
+
+    delete_contracts = data.get('delete_contracts')
+    contracts = request.files.getlist('contracts')
+
+    if delete_contracts:
+        # Delete files not in new scans_links but present in old contract['scans_links']
+        for contract_link in client['contracts_links']:
+            if contract_link in delete_contracts:
+                # Extract file key from the old_scan_link
+                file_key = contract_link.split('/')[-1]
+                config.s3_client.delete_object(Bucket='olimpiabucket', Key=f'contracts_clients/{file_key}')
+                clients_collection.find_one_and_update({'_id': ObjectId(client_id)},
+                                                         {"$pull": {"contracts_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{file_key}"}})
+
+    if contracts:
+        for contract in contracts:
+            # Create an in-memory file-like object
+            file_stream = io.BytesIO()
+            contract.save(file_stream)
+            file_stream.seek(0)
+
+            def generate_unique_filename(original_filename):
+                # Get current timestamp
+                current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+
+                # Generate a unique identifier (UUID)
+                unique_identifier = str(uuid.uuid4())
+
+                # Extract the file extension from the original filename
+                file_extension = original_filename.rsplit('.', 1)[-1].lower()
+
+                # Combine timestamp, unique identifier, and file extension to create a unique filename
+                unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
+
+                return unique_filename
+
+            unique_filename = generate_unique_filename(contract.filename)
+
+            # Upload the file directly to S3
+            config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts_clients/{unique_filename}', ExtraArgs={'ACL': 'public-read'})
+            clients_collection.find_one_and_update({'_id': ObjectId(client_id)},
+                                                     {"$push": {"contracts_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{unique_filename}"}})
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_client', methods=['POST'])
+def delete_client():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    clients_ids = data.get('clients_ids')
+    for client_id in clients_ids:
+        clients_collection.find_one_and_delete({'_id': ObjectId(client_id)})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/client_info', methods=['POST'])
+def client_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    client_id = data.get('client_id')
+    object_id = ObjectId(client_id)
+    client_document = clients_collection.find_one({'_id': object_id})
+
+    if client_document:
+        # Convert ObjectId to string before returning the response
+        client_document['_id'] = str(client_document['_id'])
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(client_document, default=str), 200, {'Content-Type': 'application/json'}
+    else:
+        response = jsonify({'message': 'Client not found'}), 404
+        return response
+
+
+@application.route('/clients', methods=['POST'])
+def clients():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+
+    filter_criteria = {}
+    if keyword:
+        clients_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+
+    # Count the total number of clients that match the filter criteria
+    total_clients = clients_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_clients / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(clients_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_clients)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'clients': documents, 'total_clients': total_clients, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response
 
 
 if __name__ == '__main__':
