@@ -29,6 +29,7 @@ tasks_collection = db['tasks']
 contracts_collection = db['contracts']
 merchants_reports_collection = db['merchants_reports']
 clients_collection = db['clients']
+orders_collection = db['orders']
 
 bcrypt = Bcrypt(application)
 
@@ -930,6 +931,114 @@ def clients():
     # Serialize the documents using json_util from pymongo and specify encoding
     response = Response(json_util.dumps(
         {'clients': documents, 'total_clients': total_clients, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response
+
+
+@application.route('/update_order', methods=['POST'])
+def update_order():
+    data = request.form
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    order_id = data.get('order_id')
+    order = orders_collection.find_one({'_id': ObjectId(order_id)})
+    if order is None:
+        return jsonify({'message': False}), 404
+
+    # Update task fields based on the provided data
+    order['sales_agent'] = data.get('sales_agent', order['sales_agent'])
+    order['distributor'] = data.get('distributor', order['distributor'])
+    order['shop'] = data.get('shop', order['shop'])
+    order['products'] = data.get('products', order['products'])
+    order['status'] = data.get('status', order['status'])
+    orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
+
+    order = orders_collection.find_one({'_id': ObjectId(order_id)})
+    total_amount = 0
+    total_amount_discount = 0
+    for product in order['products']:
+        if product['discount'] == '0':
+            total_amount += int(product['amount'])
+        elif product['discount'] != '0':
+            total_amount_discount += int(product['amount'])
+    order['total_amount'] = total_amount
+    order['total_amount_discount'] = total_amount_discount
+    orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_order', methods=['POST'])
+def delete_order():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    orders_ids = data.get('orders_ids')
+    for order_id in orders_ids:
+        orders_collection.find_one_and_delete({'_id': ObjectId(order_id)})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/order_info', methods=['POST'])
+def order_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    order_id = data.get('order_id')
+    object_id = ObjectId(order_id)
+    order_document = orders_collection.find_one({'_id': object_id})
+
+    if order_document:
+        # Convert ObjectId to string before returning the response
+        order_document['_id'] = str(order_document['_id'])
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(order_document, default=str), 200, {'Content-Type': 'application/json'}
+    else:
+        response = jsonify({'message': 'Order not found'}), 404
+        return response
+
+
+@application.route('/orders', methods=['POST'])
+def orders():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    page = data.get('page', 1)  # Default to page 1 if not provided
+    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+
+    filter_criteria = {}
+    if keyword:
+        orders_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+
+    # Count the total number of clients that match the filter criteria
+    total_orders = orders_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_orders / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Calculate the range of clients being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_orders)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'orders': documents, 'total_orders': total_orders, 'start_range': start_range, 'end_range': end_range,
          'total_pages': total_pages},
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
