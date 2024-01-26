@@ -738,8 +738,11 @@ def add_client():
     pib_kontaktna = data.get('pib_kontaktna')
     number = data.get('number')
     email = data.get('email')
-    supervisors = []
+    supervisors = data.get('supervisors')
+    if supervisors:
+        supervisors = json.loads(supervisors)
     contracts = request.files.getlist('contracts')
+    payment_terms_and_conditions = data.get('payment_terms_and_conditions')
 
     document = {'name': name,
                 'edrpou': edrpou,
@@ -753,7 +756,8 @@ def add_client():
                 'pib_kontaktna': pib_kontaktna,
                 'number': number,
                 'email': email,
-                'supervisors': supervisors}
+                'supervisors': supervisors,
+                'payment_terms_and_conditions': payment_terms_and_conditions}
 
     contracts_links_list = []
     for contract in contracts:
@@ -815,7 +819,8 @@ def update_client():
     client['pib_kontaktna'] = data.get('pib_kontaktna', client['pib_kontaktna'])
     client['number'] = data.get('number', client['number'])
     client['email'] = data.get('email', client['email'])
-    client['supervisors'] = data.get('supervisors', client['supervisors'])
+    client['supervisors'] = json.loads(data.get('supervisors', client['supervisors']))
+    client['payment_terms_and_conditions'] = data.get('payment_terms_and_conditions', client['payment_terms_and_conditions'])
     clients_collection.update_one({'_id': ObjectId(client_id)}, {'$set': client})
 
     delete_contracts = data.get('delete_contracts')
