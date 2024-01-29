@@ -959,7 +959,13 @@ def update_order():
     order['distributor'] = data.get('distributor', order['distributor'])
     order['shop'] = data.get('shop', order['shop'])
     order['products'] = data.get('products', order['products'])
-    order['status'] = data.get('status', order['status'])
+    status = data.get('status')
+    if status:
+        status_doc = statuses_collection.find_one({'status': status})
+        if status_doc:
+            del status_doc['_id']
+        order['status'] = status_doc
+    order['photos'] = data.get('photos', order['photos'])
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
 
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
