@@ -944,7 +944,7 @@ def clients():
 
 @application.route('/update_order', methods=['POST'])
 def update_order():
-    data = request.form
+    data = request.get_json()
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
