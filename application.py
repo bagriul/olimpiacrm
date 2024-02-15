@@ -15,6 +15,8 @@ from botocore.client import Config
 import io
 from botocore.exceptions import ClientError
 import uuid
+import requests
+import xml.etree.ElementTree as ET
 
 
 application = Flask(__name__)
@@ -30,6 +32,7 @@ contracts_collection = db['contracts']
 merchants_reports_collection = db['merchants_reports']
 clients_collection = db['clients']
 orders_collection = db['orders']
+products_collection = db['products']
 
 bcrypt = Bcrypt(application)
 
@@ -415,6 +418,36 @@ def users():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response, 200
+
+
+def upload_contract_to_s3(contract, unique_filename):
+    # Create an in-memory file-like object
+    file_stream = io.BytesIO()
+    contract.save(file_stream)
+    file_stream.seek(0)
+
+    # Upload the file directly to S3
+    config.s3_client.upload_fileobj(
+        file_stream,
+        'olimpiabucket',
+        f'contracts_clients/{unique_filename}',
+        ExtraArgs={'ACL': 'public-read'}
+    )
+
+def generate_unique_filename(original_filename):
+    # Get current timestamp
+    current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+
+    # Generate a unique identifier (UUID)
+    unique_identifier = str(uuid.uuid4())
+
+    # Extract the file extension from the original filename
+    file_extension = original_filename.rsplit('.', 1)[-1].lower()
+
+    # Combine timestamp, unique identifier, and file extension to create a unique filename
+    unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
+
+    return unique_filename
 
 
 @application.route('/add_contract', methods=['POST'])
@@ -1054,6 +1087,271 @@ def orders():
         ensure_ascii=False).encode('utf-8'),
                         content_type='application/json;charset=utf-8')
     return response
+
+
+@application.route('/products', methods=['POST'])
+def products():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Retrieve data from external API
+    username = 'Site'
+    password = 'h7rGXOR7XYnS21BGg904'
+    url = 'http://olimpia.comp.lviv.ua:8188/BaseWeb/hs/base?action=getreportrest'
+    response = requests.get(url, auth=(username, password))
+    xml_string = response.text
+
+    # Parse XML response
+    root = ET.fromstring(xml_string)
+
+    # Insert products into the database
+    for product in root.findall('Product'):
+        code = product.get('Code')
+        good = product.get('Good')
+        rest = product.get('Rest')
+        series = product.get('Series')
+        document = {
+            'code': code,
+            'good': good,
+            'rest': rest,
+            'series': series,
+            'warehouse': 'Склад Сировини',
+            'subwarehouse': 'Етрус',
+            'recommended_rest': ''
+        }
+        is_present = products_collection.find_one({'code': code})
+        if is_present is None:
+            products_collection.insert_one(document)
+
+    # Pagination and filtering
+    keyword = data.get('keyword')
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
+    warehouse = data.get('warehouse')
+    subwarehouse = data.get('subwarehouse')
+
+    filter_criteria = {}
+    if keyword:
+        filter_criteria['$text'] = {'$search': keyword}
+    if warehouse:
+        regex_pattern = f'.*{re.escape(warehouse)}.*'
+        filter_criteria['warehouse'] = {'$regex': regex_pattern, '$options': 'i'}
+    if subwarehouse:
+        regex_pattern = f'.*{re.escape(subwarehouse)}.*'
+        filter_criteria['subwarehouse'] = {'$regex': regex_pattern, '$options': 'i'}
+
+    total_products = products_collection.count_documents(filter_criteria)
+    total_pages = math.ceil(total_products / per_page)
+    skip = (page - 1) * per_page
+    documents = list(products_collection.find(filter_criteria).skip(skip).limit(per_page))
+
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_products)
+
+    response = Response(
+        json_util.dumps({
+            'products': documents,
+            'total_products': total_products,
+            'start_range': start_range,
+            'end_range': end_range,
+            'total_pages': total_pages
+        }, ensure_ascii=False).encode('utf-8'),
+        content_type='application/json;charset=utf-8'
+    )
+
+    return response
+
+
+@application.route('/add_product', methods=['POST'])
+def add_product():
+    data = request.form
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Extract product type
+    product_type = data.get('type')
+
+    # Handle workwear product type
+    if product_type == 'workwear':
+        employee = data.get('employee')
+        name = data.get('name')
+        date = data.get('date')
+        price = data.get('price')
+        lifetime = data.get('lifetime')
+        residual_value = data.get('residual_value')
+        recommended_rest = data.get('recommended_rest', None)
+
+        document = {
+            'employee': employee,
+            'name': name,
+            'date': date,
+            'price': price,
+            'lifetime': lifetime,
+            'residual_value': residual_value,
+            'warehouse': 'Склад Спецодягу',
+            'subwarehouse': employee,
+            'recommended_rest': recommended_rest
+        }
+
+    # Handle distributor product type
+    elif product_type == 'distributor':
+        distributor = data.get('distributor')
+        name = data.get('name')
+        amount = data.get('amount')
+        price = data.get('price')
+        sum = amount * price
+        recommended_rest = data.get('recommended_rest', None)
+
+        document = {
+            'name': name,
+            'amount': amount,
+            'price': price,
+            'sum': sum,
+            'warehouse': "Склад Дистриб'ютора",
+            'subwarehouse': distributor,
+            'recommended_rest': recommended_rest
+        }
+
+        # Handle contracts
+        contracts = request.files.getlist('contracts')
+        contracts_links_list = []
+
+        for contract in contracts:
+            # Generate unique filename
+            unique_filename = generate_unique_filename(contract.filename)
+
+            # Upload contract file to S3
+            upload_contract_to_s3(contract, unique_filename)
+
+            # Append contract link to the list
+            contracts_links_list.append(
+                f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts_clients/{unique_filename}')
+
+        document['contracts_links'] = contracts_links_list
+
+    else:
+        return jsonify({'message': False}), 400
+
+    # Insert product document into the database
+    products_collection.insert_one(document)
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/update_product', methods=['POST'])
+def update_product():
+    data = request.form
+    product_id = data.get('product_id')
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Find the existing product document
+    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    if not product:
+        return jsonify({'message': False}), 404
+
+    # Extract fields that can be updated
+    product_type = data.get('type', product['type'])
+    update_document = {}
+
+    # Handle workwear product type
+    if product_type == 'workwear':
+        for field in ['employee', 'name', 'date', 'price', 'lifetime', 'residual_value', 'recommended_rest']:
+            if field in data:
+                update_document[field] = data.get(field)
+
+        if 'employee' in update_document:
+            update_document['subwarehouse'] = update_document['employee']
+
+    # Handle distributor product type
+    elif product_type == 'distributor':
+        for field in ['distributor', 'name', 'amount', 'price', 'recommended_rest']:
+            if field in data:
+                update_document[field] = data.get(field)
+
+        if 'amount' in update_document and 'price' in update_document:
+            update_document['sum'] = float(update_document['amount']) * float(update_document['price'])
+        elif 'amount' in update_document:
+            update_document['sum'] = float(update_document['amount']) * product['price']
+        elif 'price' in update_document:
+            update_document['sum'] = product['amount'] * float(update_document['price'])
+
+        if 'distributor' in update_document:
+            update_document['subwarehouse'] = update_document['distributor']
+
+        # Handle contract updates
+        delete_contracts = request.form.getlist('delete_contracts')
+        contracts = request.files.getlist('contracts')
+        contracts_links_list = product.get('contracts_links', [])
+
+        if delete_contracts:
+            # Delete specified contracts
+            for contract_link in contracts_links_list[:]:
+                if contract_link in delete_contracts:
+                    file_key = contract_link.split('/')[-1]
+                    config.s3_client.delete_object(Bucket='olimpiabucket', Key=f'contracts_clients/{file_key}')
+                    contracts_links_list.remove(contract_link)
+
+        if contracts:
+            # Upload new contracts
+            for contract in contracts:
+                unique_filename = generate_unique_filename(contract.filename)
+                upload_contract_to_s3(contract, unique_filename)
+                contracts_links_list.append(
+                    f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts_clients/{unique_filename}')
+
+        update_document['contracts_links'] = contracts_links_list
+
+    else:
+        return jsonify({'message': False}), 400
+
+    # Update the product document in the database
+    if update_document:
+        products_collection.update_one({'_id': ObjectId(product_id)}, {'$set': update_document})
+
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_product', methods=['POST'])
+def delete_product():
+    data = request.form
+    product_id = data.get('product_id')
+    access_token = data.get('access_token')
+
+    # Check token validity
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Find the product to delete
+    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    if not product:
+        return jsonify({'message': False}), 404
+
+    # If the product has contracts, delete them from S3
+    contracts_links = product.get('contracts_links', [])
+    for contract_link in contracts_links:
+        file_key = contract_link.split('/')[-1]
+        try:
+            config.s3_client.delete_object(Bucket='olimpiabucket', Key=f'contracts_clients/{file_key}')
+        except Exception as e:
+            # Handle error (e.g., log the error)
+            print(f"Error deleting contract {file_key} from S3: {e}")
+
+    # Delete the product from the database
+    products_collection.delete_one({'_id': ObjectId(product_id)})
+
+    return jsonify({'message': True}), 200
 
 
 if __name__ == '__main__':
