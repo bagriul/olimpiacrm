@@ -17,6 +17,15 @@ from botocore.exceptions import ClientError
 import uuid
 import requests
 import xml.etree.ElementTree as ET
+from uuid import uuid4
+from analytics_functions import (
+    total_sales, average_order_amount, order_volume_dynamic, paid_orders_percentage,
+    analyze_repeat_orders, calculate_sales_agent_rating, calculate_product_rating,
+    get_total_rest_by_warehouse, get_total_price_for_workwear, get_low_stock_products,
+    get_products_with_expired_series, get_total_amount_for_distributor,
+    get_total_amount_manufactured_by_good, get_total_used_raw, get_defect_raw_percentage,
+    get_contracts_stats, sale_products_report, defective_products_report, pallets_report
+)
 
 
 application = Flask(__name__)
@@ -33,6 +42,10 @@ merchants_reports_collection = db['merchants_reports']
 clients_collection = db['clients']
 orders_collection = db['orders']
 products_collection = db['products']
+manufactured_products_collection = db['manufactured_products']
+used_raw_collection = db['used_raw']
+defective_products_collection = db['defective_products']
+defective_pallets_collection = db['defective_pallets']
 
 bcrypt = Bcrypt(application)
 
@@ -48,10 +61,8 @@ def decode_access_token(access_token, secret_key):
         print(payload)
         return payload
     except jwt.ExpiredSignatureError:
-        # Handle expired token
         return None
     except jwt.InvalidTokenError:
-        # Handle invalid token
         return None
 
 
@@ -60,14 +71,11 @@ def decode_refresh_token(refresh_token, secret_key):
         payload = jwt.decode(refresh_token, secret_key, algorithms=['HS256'])
         return payload
     except jwt.ExpiredSignatureError:
-        # Handle expired token
         return None
     except jwt.InvalidTokenError:
-        # Handle invalid token
         return None
 
 
-# Sample function to verify access token
 def verify_access_token(access_token):
     try:
         decoded_token = decode_access_token(access_token, SECRET_KEY)
@@ -78,19 +86,14 @@ def verify_access_token(access_token):
             if user:
                 name = user['name']
                 return jsonify({'name': name}), 200
-            # User is authenticated, proceed with processing the request
             else:
                 return jsonify({'message': 'User not found'}), 404
-        # User not found, handle the error
     except jwt.ExpiredSignatureError:
-        # Token has expired
         return False
     except jwt.InvalidTokenError:
-        # Invalid token
         return False
 
 
-# Sample function to verify refresh token
 def verify_refresh_token(refresh_token):
     try:
         decoded_token = decode_refresh_token(refresh_token, SECRET_KEY)
@@ -101,15 +104,11 @@ def verify_refresh_token(refresh_token):
             if user:
                 name = user['name']
                 return jsonify({'name': name}), 200
-            # User is authenticated, proceed with processing the request
             else:
                 return jsonify({'message': 'User not found'}), 404
-        # User not found, handle the error
     except jwt.ExpiredSignatureError:
-        # Token has expired
         return False
     except jwt.InvalidTokenError:
-        # Invalid token
         return False
 
 
@@ -145,7 +144,6 @@ def validate_tokens():
         return verify_refresh_token(refresh_token)
 
 
-# Endpoint for user login
 @application.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -156,7 +154,7 @@ def login():
     user = users_collection.find_one({'email': email})
 
     if user:
-        hashed_password_in_db = user.get('password', '')  # Assuming the field name is 'password'
+        hashed_password_in_db = user.get('password', '')
 
         if bcrypt.check_password_hash(hashed_password_in_db, password):
             user_id = str(user['_id'])  # Assuming user ID is stored as ObjectId in MongoDB
@@ -176,7 +174,6 @@ def login():
     return response
 
 
-# Endpoint for user registration
 @application.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -184,7 +181,6 @@ def register():
     email = data.get('email')
     password = data.get('password')
 
-    # Hash the password using bcrypt
     hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
 
     document = {
@@ -220,9 +216,7 @@ def add_task():
         if status_doc:
             del status_doc['_id']
 
-    # Get today's date
     today = datetime.today()
-    # Format the date
     formatted_date = today.strftime("%a %b %d %Y")
 
     document = {'date': formatted_date,
@@ -247,7 +241,7 @@ def update_task():
     if task is None:
         return jsonify({'message': False}), 404
 
-    # Update task fields based on the provided data
+    # Update fields based on the provided data
     task['headline'] = data.get('headline', task['headline'])
     task['responsible'] = data.get('responsible', task['responsible'])
     task['deadline'] = data.get('deadline', task['deadline'])
@@ -289,7 +283,6 @@ def task_info():
     task_document = tasks_collection.find_one({'_id': object_id})
 
     if task_document:
-        # Convert ObjectId to string before returning the response
         task_document['_id'] = str(task_document['_id'])
 
         # Use dumps() to handle ObjectId serialization
@@ -306,15 +299,14 @@ def tasks():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
     keyword = data.get('keyword')
-    page = data.get('page', 1)  # Default to page 1 if not provided
-    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
 
     filter_criteria = {}
     if keyword:
         tasks_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
 
-    # Count the total number of clients that match the filter criteria
     total_tasks = tasks_collection.count_documents(filter_criteria)
 
     total_pages = math.ceil(total_tasks / per_page)
@@ -325,7 +317,7 @@ def tasks():
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    # Calculate the range of clients being displayed
+    # Calculate the range being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_tasks)
 
@@ -338,7 +330,6 @@ def tasks():
     return response
 
 
-# Endpoint to create new client status
 @application.route('/new_status', methods=['POST'])
 def new_status():
     data = request.get_json()
@@ -369,7 +360,6 @@ def get_statuses():
         statuses_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': type}
 
-    # Retrieve specific fields from all documents in the collection
     documents = list(statuses_collection.find(filter_criteria))
     for document in documents:
         document['_id'] = str(document['_id'])
@@ -388,26 +378,23 @@ def users():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
     keyword = data.get('keyword')
-    page = data.get('page', 1)  # Default to page 1 if not provided
-    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
 
     filter_criteria = {}
     if keyword:
         users_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
 
-    # Count the total number of clients that match the filter criteria
     total_users = users_collection.count_documents(filter_criteria)
 
     total_pages = math.ceil(total_users / per_page)
 
-    # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
     documents = list(users_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    # Calculate the range of clients being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_users)
 
@@ -435,16 +422,13 @@ def upload_contract_to_s3(contract, unique_filename):
     )
 
 def generate_unique_filename(original_filename):
-    # Get current timestamp
     current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
 
-    # Generate a unique identifier (UUID)
     unique_identifier = str(uuid.uuid4())
 
     # Extract the file extension from the original filename
     file_extension = original_filename.rsplit('.', 1)[-1].lower()
 
-    # Combine timestamp, unique identifier, and file extension to create a unique filename
     unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
 
     return unique_filename
@@ -463,6 +447,8 @@ def add_contract():
     deadline = data.get('deadline')
     subject = data.get('subject')
     status = data.get('status', None)
+    original_document = data.get('original_document', None)
+    is_valid = data.get('is_valid', None)
     if status:
         status_doc = statuses_collection.find_one({'status': status})
         if status_doc:
@@ -475,7 +461,9 @@ def add_contract():
                 'category': category,
                 'deadline': deadline,
                 'subject': subject,
-                'status': status_doc}
+                'status': status_doc,
+                'original_document': original_document,
+                'is_valid': is_valid}
     scans_links_list = []
     for scan in scans:
         # Create an in-memory file-like object
@@ -484,16 +472,13 @@ def add_contract():
         file_stream.seek(0)
 
         def generate_unique_filename(original_filename):
-            # Get current timestamp
             current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
 
-            # Generate a unique identifier (UUID)
             unique_identifier = str(uuid.uuid4())
 
             # Extract the file extension from the original filename
             file_extension = original_filename.rsplit('.', 1)[-1].lower()
 
-            # Combine timestamp, unique identifier, and file extension to create a unique filename
             unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
 
             return unique_filename
@@ -521,13 +506,15 @@ def update_contract():
     if contract is None:
         return jsonify({'message': False}), 404
 
-    # Update task fields based on the provided data
+    # Update fields based on the provided data
     contract['date'] = data.get('date', contract['date'])
     contract['number'] = data.get('number', contract['number'])
     contract['counterpartie'] = data.get('counterpartie', contract['counterpartie'])
     contract['category'] = data.get('category', contract['category'])
     contract['deadline'] = data.get('deadline', contract['deadline'])
     contract['subject'] = data.get('subject', contract['subject'])
+    contract['original_document'] = data.get('original_document', contract['original_document'])
+    contract['is_valid'] = data.get('is_valid', contract['is_valid'])
     status = data.get('status')
     if status:
         status_doc = statuses_collection.find_one({'status': status})
@@ -557,16 +544,13 @@ def update_contract():
             file_stream.seek(0)
 
             def generate_unique_filename(original_filename):
-                # Get current timestamp
                 current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
 
-                # Generate a unique identifier (UUID)
                 unique_identifier = str(uuid.uuid4())
 
                 # Extract the file extension from the original filename
                 file_extension = original_filename.rsplit('.', 1)[-1].lower()
 
-                # Combine timestamp, unique identifier, and file extension to create a unique filename
                 unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
 
                 return unique_filename
@@ -606,7 +590,6 @@ def contract_info():
     contract_document = contracts_collection.find_one({'_id': object_id})
 
     if contract_document:
-        # Convert ObjectId to string before returning the response
         contract_document['_id'] = str(contract_document['_id'])
 
         # Use dumps() to handle ObjectId serialization
@@ -623,15 +606,14 @@ def contracts():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
     keyword = data.get('keyword')
-    page = data.get('page', 1)  # Default to page 1 if not provided
-    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
 
     filter_criteria = {}
     if keyword:
         contracts_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
 
-    # Count the total number of clients that match the filter criteria
     total_contracts = contracts_collection.count_documents(filter_criteria)
 
     total_pages = math.ceil(total_contracts / per_page)
@@ -642,7 +624,7 @@ def contracts():
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    # Calculate the range of clients being displayed
+    # Calculate the range being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_contracts)
 
@@ -662,15 +644,14 @@ def merchants_reports():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
     keyword = data.get('keyword')
-    page = data.get('page', 1)  # Default to page 1 if not provided
-    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
 
     filter_criteria = {}
     if keyword:
         merchants_reports_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
 
-    # Count the total number of clients that match the filter criteria
     total_reports = merchants_reports_collection.count_documents(filter_criteria)
 
     total_pages = math.ceil(total_reports / per_page)
@@ -681,7 +662,7 @@ def merchants_reports():
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    # Calculate the range of clients being displayed
+    # Calculate the range being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_reports)
 
@@ -706,14 +687,14 @@ def merchants_reports_update():
     if report is None:
         return jsonify({'message': False}), 404
 
-    # Update task fields based on the provided data
+    # Update fields based on the provided data
     report['shop_name'] = data.get('shop_name', report['shop_name'])
     report['product_name'] = data.get('product_name', report['product_name'])
     report['product_amount'] = data.get('product_amount', report['product_amount'])
     report['sale_amount'] = data.get('sale_amount', report['sale_amount'])
     report['photo'] = data.get('photo', report['photo'])
 
-    # Update the task in the database
+    # Update the report in the database
     merchants_reports_collection.update_one({'_id': ObjectId(report_id)}, {'$set': report})
     return jsonify({'message': True}), 200
 
@@ -743,7 +724,6 @@ def merchant_report_info():
     report_document = merchants_reports_collection.find_one({'_id': object_id})
 
     if report_document:
-        # Convert ObjectId to string before returning the response
         report_document['_id'] = str(report_document['_id'])
 
         # Use dumps() to handle ObjectId serialization
@@ -800,16 +780,13 @@ def add_client():
         file_stream.seek(0)
 
         def generate_unique_filename(original_filename):
-            # Get current timestamp
             current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
 
-            # Generate a unique identifier (UUID)
             unique_identifier = str(uuid.uuid4())
 
             # Extract the file extension from the original filename
             file_extension = original_filename.rsplit('.', 1)[-1].lower()
 
-            # Combine timestamp, unique identifier, and file extension to create a unique filename
             unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
 
             return unique_filename
@@ -839,7 +816,7 @@ def update_client():
     if client is None:
         return jsonify({'message': False}), 404
 
-    # Update task fields based on the provided data
+    # Update fields based on the provided data
     client['name'] = data.get('name', client['name'])
     client['edrpou'] = data.get('edrpou', client['edrpou'])
     client['ipn'] = data.get('ipn', client['ipn'])
@@ -877,16 +854,13 @@ def update_client():
             file_stream.seek(0)
 
             def generate_unique_filename(original_filename):
-                # Get current timestamp
                 current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
 
-                # Generate a unique identifier (UUID)
                 unique_identifier = str(uuid.uuid4())
 
                 # Extract the file extension from the original filename
                 file_extension = original_filename.rsplit('.', 1)[-1].lower()
 
-                # Combine timestamp, unique identifier, and file extension to create a unique filename
                 unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
 
                 return unique_filename
@@ -926,7 +900,6 @@ def client_info():
     client_document = clients_collection.find_one({'_id': object_id})
 
     if client_document:
-        # Convert ObjectId to string before returning the response
         client_document['_id'] = str(client_document['_id'])
 
         # Use dumps() to handle ObjectId serialization
@@ -943,15 +916,14 @@ def clients():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
     keyword = data.get('keyword')
-    page = data.get('page', 1)  # Default to page 1 if not provided
-    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
 
     filter_criteria = {}
     if keyword:
         clients_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
 
-    # Count the total number of clients that match the filter criteria
     total_clients = clients_collection.count_documents(filter_criteria)
 
     total_pages = math.ceil(total_clients / per_page)
@@ -962,7 +934,7 @@ def clients():
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    # Calculate the range of clients being displayed
+    # Calculate the range being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_clients)
 
@@ -987,7 +959,7 @@ def update_order():
     if order is None:
         return jsonify({'message': False}), 404
 
-    # Update task fields based on the provided data
+    # Update fields based on the provided data
     order['sales_agent'] = data.get('sales_agent', order['sales_agent'])
     order['distributor'] = data.get('distributor', order['distributor'])
     order['shop'] = data.get('shop', order['shop'])
@@ -1040,8 +1012,16 @@ def order_info():
     order_document = orders_collection.find_one({'_id': object_id})
 
     if order_document:
-        # Convert ObjectId to string before returning the response
+        order_number_list = []
+        order_number_list.append(order_document['order_number_1c'])
+        request_payment = requests.post('https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getpaymentstatus',
+                                        data={"order": order_number_list}, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
+        root = ET.fromstring(request_payment.text)
+        payment_answer = root.text
+        payment_status = payment_answer
+
         order_document['_id'] = str(order_document['_id'])
+        order_document['payment_status'] = payment_status
 
         # Use dumps() to handle ObjectId serialization
         return json.dumps(order_document, default=str), 200, {'Content-Type': 'application/json'}
@@ -1057,15 +1037,14 @@ def orders():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
     keyword = data.get('keyword')
-    page = data.get('page', 1)  # Default to page 1 if not provided
-    per_page = data.get('per_page', 10)  # Default to 10 items per page if not provided
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
 
     filter_criteria = {}
     if keyword:
         orders_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
 
-    # Count the total number of clients that match the filter criteria
     total_orders = orders_collection.count_documents(filter_criteria)
 
     total_pages = math.ceil(total_orders / per_page)
@@ -1076,7 +1055,7 @@ def orders():
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    # Calculate the range of clients being displayed
+    # Calculate the range being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_orders)
 
@@ -1097,8 +1076,8 @@ def products():
         return jsonify({'token': False}), 401
 
     # Retrieve data from external API
-    username = 'Site'
-    password = 'h7rGXOR7XYnS21BGg904'
+    username = 'CRM'
+    password = 'CegJr6YcK1sTnljgTIly'
     url = 'http://olimpia.comp.lviv.ua:8188/BaseWeb/hs/base?action=getreportrest'
     response = requests.get(url, auth=(username, password))
     xml_string = response.text
@@ -1106,24 +1085,69 @@ def products():
     # Parse XML response
     root = ET.fromstring(xml_string)
 
+    # Delete old products
+    products_collection.delete_many({'subwarehouse': 'Етрус'})
+
     # Insert products into the database
     for product in root.findall('Product'):
         code = product.get('Code')
         good = product.get('Good')
         rest = product.get('Rest')
         series = product.get('Series')
+        type = product.get('Type')
+
+        if type == "1":
+            warehouse = 'Склад Сировини'
+        elif type == '2':
+            warehouse = 'Склад Готової продукції'
+
         document = {
             'code': code,
             'good': good,
             'rest': rest,
             'series': series,
-            'warehouse': 'Склад Сировини',
+            'warehouse': warehouse,
             'subwarehouse': 'Етрус',
             'recommended_rest': ''
         }
-        is_present = products_collection.find_one({'code': code})
-        if is_present is None:
-            products_collection.insert_one(document)
+        products_collection.insert_one(document)
+
+    # Retrieve data from external API
+    username = 'CRM'
+    password = 'CegJr6YcK1sTnljgTIly'
+    url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
+    response = requests.get(url, auth=(username, password))
+    xml_string = response.text
+
+    # Parse XML response
+    root = ET.fromstring(xml_string)
+
+    # Delete old products
+    products_collection.delete_many({'subwarehouse': 'Фастпол'})
+
+    # Insert products into the database
+    for product in root.findall('Product'):
+        code = product.get('Code')
+        good = product.get('Good')
+        rest = product.get('Rest')
+        series = product.get('Series')
+        type = product.get('Type')
+
+        if type == "1":
+            warehouse = 'Склад Сировини'
+        elif type == '2':
+            warehouse = 'Склад Готової продукції'
+
+        document = {
+            'code': code,
+            'good': good,
+            'rest': rest,
+            'series': series,
+            'warehouse': warehouse,
+            'subwarehouse': 'Фастпол',
+            'recommended_rest': ''
+        }
+        products_collection.insert_one(document)
 
     # Pagination and filtering
     keyword = data.get('keyword')
@@ -1172,11 +1196,9 @@ def add_product():
     data = request.form
     access_token = data.get('access_token')
 
-    # Check token validity
     if not check_token(access_token):
         return jsonify({'token': False}), 401
 
-    # Extract product type
     product_type = data.get('type')
 
     # Handle workwear product type
@@ -1191,7 +1213,7 @@ def add_product():
 
         document = {
             'employee': employee,
-            'name': name,
+            'good': name,
             'date': date,
             'price': price,
             'lifetime': lifetime,
@@ -1211,7 +1233,7 @@ def add_product():
         recommended_rest = data.get('recommended_rest', None)
 
         document = {
-            'name': name,
+            'good': name,
             'amount': amount,
             'price': price,
             'sum': sum,
@@ -1225,13 +1247,10 @@ def add_product():
         contracts_links_list = []
 
         for contract in contracts:
-            # Generate unique filename
             unique_filename = generate_unique_filename(contract.filename)
 
-            # Upload contract file to S3
             upload_contract_to_s3(contract, unique_filename)
 
-            # Append contract link to the list
             contracts_links_list.append(
                 f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts_clients/{unique_filename}')
 
@@ -1240,7 +1259,6 @@ def add_product():
     else:
         return jsonify({'message': False}), 400
 
-    # Insert product document into the database
     products_collection.insert_one(document)
 
     return jsonify({'message': True}), 200
@@ -1252,7 +1270,6 @@ def update_product():
     product_id = data.get('product_id')
     access_token = data.get('access_token')
 
-    # Check token validity
     if not check_token(access_token):
         return jsonify({'token': False}), 401
 
@@ -1316,7 +1333,6 @@ def update_product():
     else:
         return jsonify({'message': False}), 400
 
-    # Update the product document in the database
     if update_document:
         products_collection.update_one({'_id': ObjectId(product_id)}, {'$set': update_document})
 
@@ -1329,7 +1345,6 @@ def delete_product():
     product_id = data.get('product_id')
     access_token = data.get('access_token')
 
-    # Check token validity
     if not check_token(access_token):
         return jsonify({'token': False}), 401
 
@@ -1345,13 +1360,184 @@ def delete_product():
         try:
             config.s3_client.delete_object(Bucket='olimpiabucket', Key=f'contracts_clients/{file_key}')
         except Exception as e:
-            # Handle error (e.g., log the error)
             print(f"Error deleting contract {file_key} from S3: {e}")
 
     # Delete the product from the database
     products_collection.delete_one({'_id': ObjectId(product_id)})
 
     return jsonify({'message': True}), 200
+
+
+@application.route('/add_defective_product', methods=['POST'])
+def add_defective_product():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    product_name = data.get('product_name')
+    return_date = data.get('return_date')
+    amount = data.get('amount')
+    price = data.get('price')
+
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    document = {'product_name': product_name,
+                'return_date': return_date,
+                'amount': amount,
+                'price': price}
+
+    defective_products_collection.insert_one(document)
+    return jsonify({'message': True}), 200
+
+
+@application.route('/update_defective_product', methods=['POST'])
+def update_defective_product():
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    product_id = data.get('product_id')
+    product = defective_products_collection.find_one({'_id': ObjectId(product_id)})
+    if product is None:
+        return jsonify({'message': False}), 404
+
+    product['product_name'] = data.get('product_name', product['product_name'])
+    product['return_date'] = data.get('return_date', product['return_date'])
+    product['amount'] = data.get('amount', product['amount'])
+    product['price'] = data.get('price', product['price'])
+
+    defective_products_collection.update_one({'_id': ObjectId(product_id)}, {'$set': product})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_defective_product', methods=['POST'])
+def delete_defective_product():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    products_ids = data.get('products_ids')
+    for product_id in products_ids:
+        defective_products_collection.find_one_and_delete({'_id': ObjectId(product_id)})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/add_pallet', methods=['POST'])
+def add_pallet():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    counterpartie = data.get('counterpartie')
+    amount = data.get('amount')
+    price = data.get('price')
+
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    document = {'counterpartie': counterpartie,
+                'amount': amount,
+                'price': price}
+
+    defective_pallets_collection.insert_one(document)
+    return jsonify({'message': True}), 200
+
+
+@application.route('/update_pallet', methods=['POST'])
+def update_pallet():
+    data = request.get_json()
+    access_token = data.get('access_token')
+
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    pallet_id = data.get('pallet_id')
+    pallet = defective_pallets_collection.find_one({'_id': ObjectId(pallet_id)})
+    if pallet is None:
+        return jsonify({'message': False}), 404
+
+    pallet['counterpartie'] = data.get('counterpartie', pallet['counterpartie'])
+    pallet['amount'] = data.get('amount', pallet['amount'])
+    pallet['price'] = data.get('price', pallet['price'])
+
+    defective_pallets_collection.update_one({'_id': ObjectId(pallet_id)}, {'$set': pallet})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/delete_pallet', methods=['POST'])
+def delete_pallet():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    pallets_ids = data.get('pallets_ids')
+    for pallet_id in pallets_ids:
+        defective_pallets_collection.find_one_and_delete({'_id': ObjectId(pallet_id)})
+    return jsonify({'message': True}), 200
+
+
+@application.route('/analytics', methods=['POST'])
+def analytics():
+    data = request.get_json()
+    start_date = data.get('start_date')
+    end_date = data.get('end_date')
+    data_types = data.get('data_type', [])
+    access_token = data.get('access_token')
+
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    # Functions with and without date parameters
+    functions_with_dates = {
+        'total_sales': total_sales,
+        'average_order_amount': average_order_amount,
+        'order_volume_dynamic': order_volume_dynamic,
+        'paid_orders_percentage': paid_orders_percentage,
+        'repeat_orders_analyze': analyze_repeat_orders,
+        'agents_rating': calculate_sales_agent_rating,
+        'products_rating': calculate_product_rating,
+        'total_amount_manufactured_by_good': get_total_amount_manufactured_by_good,
+        'total_used_raw': get_total_used_raw,
+        'defect_raw_percentage': get_defect_raw_percentage,
+        'total_contracts': get_contracts_stats,  # No need for lambda here
+        'expiring_contracts': get_contracts_stats  # No need for lambda here
+    }
+
+    functions_without_dates = {
+        'total_rest_by_warehouse': get_total_rest_by_warehouse,
+        'total_price_workwear': get_total_price_for_workwear,
+        'low_stock_products': get_low_stock_products,
+        'products_with_expired_series': get_products_with_expired_series,
+        'total_amount_distributor': get_total_amount_for_distributor,
+        'sale_products_report': sale_products_report,
+        'defective_products_report': defective_products_report,
+        'pallets_report': pallets_report
+    }
+
+    response_data = {}
+
+    # Execute functions with date parameters
+    for data_type in data_types:
+        if data_type in functions_with_dates:
+            func = functions_with_dates[data_type]
+            result = func(start_date, end_date)
+
+            # Special handling for get_contracts_stats to extract correct value
+            if data_type == 'total_contracts':
+                result = result[0]
+            elif data_type == 'expiring_contracts':
+                result = result[1]
+
+            response_data[data_type] = result
+
+    # Execute functions without date parameters
+    for data_type in data_types:
+        if data_type in functions_without_dates:
+            func = functions_without_dates[data_type]
+            response_data[data_type] = func()
+
+    return jsonify(response_data), 200
 
 
 if __name__ == '__main__':
