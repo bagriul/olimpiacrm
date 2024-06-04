@@ -1540,5 +1540,68 @@ def analytics():
     return jsonify(response_data), 200
 
 
+@application.route('/production', methods=['POST'])
+def production():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    type = data.get('type')
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
+
+    if not check_token(access_token):
+        return jsonify({'token': False}), 401
+
+    if type == 'manufactured_products':
+        filter_criteria = {}
+        total_products = manufactured_products_collection.count_documents(filter_criteria)
+        total_pages = math.ceil(total_products / per_page)
+        skip = (page - 1) * per_page
+        documents = list(manufactured_products_collection.find().skip(skip).limit(per_page))
+
+        for document in documents:
+            document['_id'] = str(document['_id'])
+
+        start_range = skip + 1
+        end_range = min(skip + per_page, total_products)
+
+        response = Response(
+            json_util.dumps({
+                'products': documents,
+                'total_products': total_products,
+                'start_range': start_range,
+                'end_range': end_range,
+                'total_pages': total_pages
+            }, ensure_ascii=False).encode('utf-8'),
+            content_type='application/json;charset=utf-8'
+        )
+
+        return response
+    elif type == 'used_raw':
+        filter_criteria = {}
+        total_products = used_raw_collection.count_documents(filter_criteria)
+        total_pages = math.ceil(total_products / per_page)
+        skip = (page - 1) * per_page
+        documents = list(used_raw_collection.find().skip(skip).limit(per_page))
+
+        for document in documents:
+            document['_id'] = str(document['_id'])
+
+        start_range = skip + 1
+        end_range = min(skip + per_page, total_products)
+
+        response = Response(
+            json_util.dumps({
+                'products': documents,
+                'total_products': total_products,
+                'start_range': start_range,
+                'end_range': end_range,
+                'total_pages': total_pages
+            }, ensure_ascii=False).encode('utf-8'),
+            content_type='application/json;charset=utf-8'
+        )
+
+        return response
+
+
 if __name__ == '__main__':
     application.run()
