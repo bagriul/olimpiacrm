@@ -1158,7 +1158,8 @@ def products():
 
     filter_criteria = {}
     if keyword:
-        filter_criteria['$text'] = {'$search': keyword}
+        regex_pattern = f'.*{re.escape(keyword)}.*'
+        filter_criteria['good'] = {'$regex': regex_pattern, '$options': 'i'}
     if warehouse:
         regex_pattern = f'.*{re.escape(warehouse)}.*'
         filter_criteria['warehouse'] = {'$regex': regex_pattern, '$options': 'i'}
