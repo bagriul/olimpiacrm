@@ -960,30 +960,43 @@ def update_order():
         return jsonify({'message': False}), 404
 
     # Update fields based on the provided data
-    order['sales_agent'] = data.get('sales_agent', order['sales_agent'])
-    order['distributor'] = data.get('distributor', order['distributor'])
-    order['shop'] = data.get('shop', order['shop'])
-    order['products'] = data.get('products', order['products'])
+    order['sales_agent'] = data.get('sales_agent', order.get('sales_agent'))
+    order['distributor'] = data.get('distributor', order.get('distributor'))
+    order['shop'] = data.get('shop', order.get('shop'))
+    order['products'] = data.get('products', order.get('products'))
+    order['comment'] = data.get('comment', order.get('comment'))
+    order['order_number'] = data.get('order_number', order.get('order_number'))
+    order['date'] = data.get('date', order.get('date'))
+    order['counterpartie_code'] = data.get('counterpartie_code', order.get('counterpartie_code'))
+    order['order_number_1c'] = data.get('order_number_1c', order.get('order_number_1c'))
+
     status = data.get('status')
     if status:
-        status_doc = statuses_collection.find_one({'status': status})
+        status_doc = statuses_collection.find_one({'name': status.get('name')})
         if status_doc:
             del status_doc['_id']
         order['status'] = status_doc
-    order['photos'] = data.get('photos', order['photos'])
+
+    order['photos'] = data.get('photos', order.get('photos'))
+
+    # Update the order in the database
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
 
+    # Recalculate totals
     order = orders_collection.find_one({'_id': ObjectId(order_id)})
     total_amount = 0
     total_amount_discount = 0
-    for product in order['products']:
-        if product['discount'] == '0':
-            total_amount += int(product['amount'])
-        elif product['discount'] != '0':
-            total_amount_discount += int(product['amount'])
+    for product in order['product']:
+        if product.get('discount', '0') == '0':
+            total_amount += int(product.get('amount', 0))
+        else:
+            total_amount_discount += int(product.get('amount', 0))
     order['total_amount'] = total_amount
     order['total_amount_discount'] = total_amount_discount
+
+    # Update totals in the database
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
+
     return jsonify({'message': True}), 200
 
 
