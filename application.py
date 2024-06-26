@@ -963,7 +963,7 @@ def update_order():
     order['sales_agent'] = data.get('sales_agent', order.get('sales_agent'))
     order['distributor'] = data.get('distributor', order.get('distributor'))
     order['shop'] = data.get('shop', order.get('shop'))
-    order['products'] = data.get('products', order.get('products'))
+    order['product'] = data.get('product', order.get('product'))
     order['comment'] = data.get('comment', order.get('comment'))
     order['order_number'] = data.get('order_number', order.get('order_number'))
     order['date'] = data.get('date', order.get('date'))
