@@ -1,3 +1,5 @@
+import pymongo
+
 import config
 from flask import Flask, request, Response, jsonify
 from flask_cors import CORS
@@ -1088,79 +1090,57 @@ def products():
     if not check_token(access_token):
         return jsonify({'token': False}), 401
 
-    # Retrieve data from external API
     username = 'CRM'
     password = 'CegJr6YcK1sTnljgTIly'
-    url = 'http://olimpia.comp.lviv.ua:8188/BaseWeb/hs/base?action=getreportrest'
-    response = requests.get(url, auth=(username, password))
-    xml_string = response.text
+    urls = ['http://olimpia.comp.lviv.ua:8188/BaseWeb/hs/base?action=getreportrest',
+            'http://olimpia.comp.lviv.ua:8188/BaseWeb1/hs/base?action=getreportrest']
 
-    # Parse XML response
-    root = ET.fromstring(xml_string)
+    for url in urls:
+        # Retrieve data from external API
+        response = requests.get(url, auth=(username, password))
+        xml_string = response.text
 
-    # Delete old products
-    products_collection.delete_many({'subwarehouse': 'Етрус'})
+        # Parse XML response
+        root = ET.fromstring(xml_string)
 
-    # Insert products into the database
-    for product in root.findall('Product'):
-        code = product.get('Code')
-        good = product.get('Good')
-        rest = product.get('Rest')
-        series = product.get('Series')
-        type = product.get('Type')
+        # Prepare bulk operations
+        operations = []
+        for product in root.findall('Product'):
+            code = product.get('Code')
+            good = product.get('Good')
+            rest = product.get('Rest')
+            series = product.get('Series')
+            type = product.get('Type')
 
-        if type == "1":
-            warehouse = 'Склад Сировини'
-        elif type == '2':
-            warehouse = 'Склад Готової продукції'
+            if type == "1":
+                warehouse = 'Склад Сировини'
+            elif type == '2':
+                warehouse = 'Склад Готової продукції'
 
-        document = {
-            'code': code,
-            'good': good,
-            'rest': rest,
-            'series': series,
-            'warehouse': warehouse,
-            'subwarehouse': 'Етрус',
-            'recommended_rest': ''
-        }
-        products_collection.insert_one(document)
+            if url == 'http://olimpia.comp.lviv.ua:8188/BaseWeb/hs/base?action=getreportrest':
+                subwarehouse = 'Етрус'
+            else:
+                subwarehouse = 'Фастпол'
 
-    # Retrieve data from external API
-    username = 'CRM'
-    password = 'CegJr6YcK1sTnljgTIly'
-    url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
-    response = requests.get(url, auth=(username, password))
-    xml_string = response.text
+            document = {
+                'code': code,
+                'good': good,
+                'rest': rest,
+                'series': series,
+                'warehouse': warehouse,
+                'subwarehouse': subwarehouse,
+                'recommended_rest': ''
+            }
 
-    # Parse XML response
-    root = ET.fromstring(xml_string)
+            operations.append(pymongo.UpdateOne(
+                {'code': code},
+                {'$set': document},
+                upsert=True
+            ))
 
-    # Delete old products
-    products_collection.delete_many({'subwarehouse': 'Фастпол'})
-
-    # Insert products into the database
-    for product in root.findall('Product'):
-        code = product.get('Code')
-        good = product.get('Good')
-        rest = product.get('Rest')
-        series = product.get('Series')
-        type = product.get('Type')
-
-        if type == "1":
-            warehouse = 'Склад Сировини'
-        elif type == '2':
-            warehouse = 'Склад Готової продукції'
-
-        document = {
-            'code': code,
-            'good': good,
-            'rest': rest,
-            'series': series,
-            'warehouse': warehouse,
-            'subwarehouse': 'Фастпол',
-            'recommended_rest': ''
-        }
-        products_collection.insert_one(document)
+        # Execute bulk operations
+        if operations:
+            products_collection.bulk_write(operations)
 
     # Pagination and filtering
     keyword = data.get('keyword')
