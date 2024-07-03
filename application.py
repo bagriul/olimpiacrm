@@ -974,7 +974,7 @@ def update_order():
 
     status = data.get('status')
     if status:
-        status_doc = statuses_collection.find_one({'name': status})
+        status_doc = statuses_collection.find_one({'status': status})
         if status_doc:
             del status_doc['_id']
         order['status'] = status_doc
