@@ -1095,6 +1095,12 @@ def products():
     urls = ['http://olimpia.comp.lviv.ua:8188/BaseWeb/hs/base?action=getreportrest',
             'http://olimpia.comp.lviv.ua:8188/BaseWeb1/hs/base?action=getreportrest']
 
+    # Fetch existing products once and store in a dictionary
+    existing_products = products_collection.find({}, {'code': 1, 'recommended_rest': 1})
+    existing_products_dict = {prod['code']: prod.get('recommended_rest', '') for prod in existing_products if 'code' in prod}
+
+    bulk_operations = []
+
     for url in urls:
         # Retrieve data from external API
         response = requests.get(url, auth=(username, password))
@@ -1104,7 +1110,6 @@ def products():
         root = ET.fromstring(xml_string)
 
         # Prepare bulk operations
-        operations = []
         for product in root.findall('Product'):
             code = product.get('Code')
             good = product.get('Good')
@@ -1122,6 +1127,9 @@ def products():
             else:
                 subwarehouse = 'Фастпол'
 
+            # Retrieve the current 'recommended_rest' from the dictionary
+            recommended_rest = existing_products_dict.get(code, '')
+
             document = {
                 'code': code,
                 'good': good,
@@ -1129,19 +1137,21 @@ def products():
                 'series': series,
                 'warehouse': warehouse,
                 'subwarehouse': subwarehouse,
-                'recommended_rest': '',
+                'recommended_rest': recommended_rest,
                 'type': '1c'
             }
 
-            operations.append(pymongo.UpdateOne(
+            bulk_operations.append(pymongo.UpdateOne(
                 {'code': code},
                 {'$set': document},
                 upsert=True
             ))
 
-        # Execute bulk operations
-        if operations:
-            products_collection.bulk_write(operations)
+    # Execute bulk operations in batches to optimize performance
+    if bulk_operations:
+        batch_size = 1000
+        for i in range(0, len(bulk_operations), batch_size):
+            products_collection.bulk_write(bulk_operations[i:i + batch_size])
 
     # Pagination and filtering
     keyword = data.get('keyword')
@@ -1285,14 +1295,14 @@ def product_info():
 @application.route('/update_product', methods=['POST'])
 def update_product():
     data = request.form
-    product_id = data.get('product_id')
+    product_code = data.get('product_code')
     access_token = data.get('access_token')
 
     if not check_token(access_token):
         return jsonify({'token': False}), 401
 
     # Find the existing product document
-    product = products_collection.find_one({'_id': ObjectId(product_id)})
+    product = products_collection.find_one({'code': product_code})
     if not product:
         return jsonify({'message': False}), 404
 
@@ -1357,7 +1367,7 @@ def update_product():
         return jsonify({'message': False}), 400
 
     if update_document:
-        products_collection.update_one({'_id': ObjectId(product_id)}, {'$set': update_document})
+        products_collection.update_one({'code': product_code}, {'$set': update_document})
 
     return jsonify({'message': True}), 200
 
