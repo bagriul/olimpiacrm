@@ -1213,7 +1213,7 @@ def add_product():
         date = data.get('date')
         price = data.get('price')
         lifetime = data.get('lifetime')
-        residual_value = data.get('residual_value')
+        rest = data.get('rest')
         recommended_rest = data.get('recommended_rest', None)
 
         document = {
@@ -1222,7 +1222,7 @@ def add_product():
             'date': date,
             'price': price,
             'lifetime': lifetime,
-            'residual_value': residual_value,
+            'rest': rest,
             'warehouse': 'Склад Спецодягу',
             'subwarehouse': employee,
             'recommended_rest': recommended_rest,
