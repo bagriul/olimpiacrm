@@ -1129,7 +1129,8 @@ def products():
                 'series': series,
                 'warehouse': warehouse,
                 'subwarehouse': subwarehouse,
-                'recommended_rest': ''
+                'recommended_rest': '',
+                'type': '1c'
             }
 
             operations.append(pymongo.UpdateOne(
@@ -1346,6 +1347,11 @@ def update_product():
                     f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts_clients/{unique_filename}')
 
         update_document['contracts_links'] = contracts_links_list
+
+    elif product_type == '1c':
+        for field in ['recommended_rest']:
+            if field in data:
+                update_document[field] = data.get(field)
 
     else:
         return jsonify({'message': False}), 400
