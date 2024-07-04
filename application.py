@@ -1214,7 +1214,8 @@ def add_product():
             'residual_value': residual_value,
             'warehouse': 'Склад Спецодягу',
             'subwarehouse': employee,
-            'recommended_rest': recommended_rest
+            'recommended_rest': recommended_rest,
+            'type': 'workwear'
         }
 
     # Handle distributor product type
@@ -1233,7 +1234,8 @@ def add_product():
             'sum': sum,
             'warehouse': "Склад Дистриб'ютора",
             'subwarehouse': distributor,
-            'recommended_rest': recommended_rest
+            'recommended_rest': recommended_rest,
+            'type': 'distributor'
         }
 
         # Handle contracts
