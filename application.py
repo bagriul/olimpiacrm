@@ -1278,9 +1278,8 @@ def product_info():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
 
-    product_id = data.get('product_id')
-    object_id = ObjectId(product_id)
-    product_document = products_collection.find_one({'_id': object_id})
+    product_code = data.get('product_code')
+    product_document = products_collection.find_one({'code': product_code})
 
     if product_document:
         product_document['_id'] = str(product_document['_id'])
@@ -1288,7 +1287,7 @@ def product_info():
         # Use dumps() to handle ObjectId serialization
         return json.dumps(product_document, default=str), 200, {'Content-Type': 'application/json'}
     else:
-        response = jsonify({'message': 'Order not found'}), 404
+        response = jsonify({'message': 'Product not found'}), 404
         return response
 
 
