@@ -1258,6 +1258,27 @@ def add_product():
     return jsonify({'message': True}), 200
 
 
+@application.route('/product_info', methods=['POST'])
+def product_info():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+
+    product_id = data.get('product_id')
+    object_id = ObjectId(product_id)
+    product_document = products_collection.find_one({'_id': object_id})
+
+    if product_document:
+        product_document['_id'] = str(product_document['_id'])
+
+        # Use dumps() to handle ObjectId serialization
+        return json.dumps(product_document, default=str), 200, {'Content-Type': 'application/json'}
+    else:
+        response = jsonify({'message': 'Order not found'}), 404
+        return response
+
+
 @application.route('/update_product', methods=['POST'])
 def update_product():
     data = request.form
