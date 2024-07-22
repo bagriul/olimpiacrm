@@ -1235,7 +1235,7 @@ def add_product():
         name = data.get('name')
         amount = data.get('amount')
         price = data.get('price')
-        sum = amount * price
+        sum = float(amount) * float(price)
         recommended_rest = data.get('recommended_rest', None)
 
         document = {
