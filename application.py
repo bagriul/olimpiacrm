@@ -1218,7 +1218,7 @@ def add_product():
 
         document = {
             'employee': employee,
-            'good': name,
+            'name': name,
             'date': date,
             'price': price,
             'lifetime': lifetime,
@@ -1239,7 +1239,7 @@ def add_product():
         recommended_rest = data.get('recommended_rest', None)
 
         document = {
-            'good': name,
+            'name': name,
             'amount': amount,
             'price': price,
             'sum': sum,
