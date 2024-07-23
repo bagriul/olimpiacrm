@@ -1278,8 +1278,12 @@ def product_info():
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
 
-    product_code = data.get('product_code')
-    product_document = products_collection.find_one({'code': product_code})
+    product_code = data.get('product_code', None)
+    product_id = data.get('product_id', None)
+    if product_code:
+        product_document = products_collection.find_one({'code': product_code})
+    elif product_id:
+        product_document = products_collection.find_one({'_id': ObjectId(product_id)})
 
     if product_document:
         product_document['_id'] = str(product_document['_id'])
