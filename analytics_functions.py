@@ -357,7 +357,10 @@ def get_low_stock_products():
     low_stock_products_aggregation = list(products_collection.aggregate(pipeline))
     low_stock_products = []
     for product in low_stock_products_aggregation:
-        low_stock_products.append(product['good'])
+        try:
+            low_stock_products.append(product['good'])
+        except KeyError:
+            pass
     return low_stock_products
 
 
