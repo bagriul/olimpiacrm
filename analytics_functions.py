@@ -637,12 +637,15 @@ def get_contracts_stats(start_date_str, end_date_str):
 def sale_products_report():
     sale_data = {}
     for report in merchants_reports_collection.find():
-        if float(report["sale_amount"]) > 0:
-            product_name = report["product_name"]
-            sale_data[product_name] = {
-                "amount": report["sale_amount"],
-                "price": report["sale_price"]
-            }
+        try:
+            if float(report["sale_amount"]) > 0:
+                product_name = report["product_name"]
+                sale_data[product_name] = {
+                    "amount": report["sale_amount"],
+                    "price": report["sale_price"]
+                }
+        except KeyError:
+            pass
     return sale_data
 
 
