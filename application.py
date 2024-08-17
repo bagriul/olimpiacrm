@@ -1639,5 +1639,43 @@ def production():
         return response
 
 
+@application.route('/used_raw', methods=['POST'])
+def used_raw():
+    data = request.get_json()
+    access_token = data.get('access_token')
+    if check_token(access_token) is False:
+        return jsonify({'token': False}), 401
+    keyword = data.get('keyword')
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
+
+    filter_criteria = {}
+    if keyword:
+        used_raw_collection.create_index([("$**", "text")])
+        filter_criteria['$text'] = {'$search': keyword}
+
+    total_used_raw = used_raw_collection.count_documents(filter_criteria)
+
+    total_pages = math.ceil(total_used_raw / per_page)
+
+    # Paginate the query results using skip and limit, and apply filters
+    skip = (page - 1) * per_page
+    documents = list(used_raw_collection.find(filter_criteria).skip(skip).limit(per_page))
+    for document in documents:
+        document['_id'] = str(document['_id'])
+
+    # Calculate the range being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_used_raw)
+
+    # Serialize the documents using json_util from pymongo and specify encoding
+    response = Response(json_util.dumps(
+        {'used_raw': documents, 'total_used_raw': total_used_raw, 'start_range': start_range, 'end_range': end_range,
+         'total_pages': total_pages},
+        ensure_ascii=False).encode('utf-8'),
+                        content_type='application/json;charset=utf-8')
+    return response
+
+
 if __name__ == '__main__':
     application.run()
