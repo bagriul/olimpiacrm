@@ -17,7 +17,7 @@ products_collection = db['products']
 manufactured_products_collection = db['manufactured_products']
 used_raw_collection = db['used_raw']
 defective_products_collection = db['defective_products']
-defective_pallets_collection = db['defective_pallets']
+pallets_collection = db['pallets']
 
 
 def total_sales(start_date, end_date):
@@ -654,21 +654,43 @@ def sale_products_report():
 
 def defective_products_report():
     defective_products_data = {}
-    for defective_product in defective_products_collection.find():
-        product_name = defective_product["product_name"]
-        defective_products_data[product_name] = {
-            "amount": defective_product["amount"],
-            "price": defective_product["price"]
-        }
+
+    # Iterate over each document in the collection
+    for document in defective_products_collection.find():
+        # Iterate over each defective product in the document
+        for defective_product in document["defective_products"]:
+            product_name = defective_product["product_name"]
+            amount = int(defective_product["amount"])
+            total_price = float(defective_product["total_price"])
+
+            # If the product is already in the dictionary, update its values
+            if product_name in defective_products_data:
+                defective_products_data[product_name]["amount"] += amount
+                defective_products_data[product_name]["total_price"] += total_price
+            else:
+                # Otherwise, add the product to the dictionary
+                defective_products_data[product_name] = {
+                    "amount": amount,
+                    "total_price": total_price
+                }
+
     return defective_products_data
 
 
 def pallets_report():
     pallets_data = {}
-    for pallet in defective_pallets_collection.find():
-        counterpartie = pallet["counterpartie"]
-        pallets_data[counterpartie] = {
-            "amount": pallet["amount"],
-            "price": pallet["price"]
-        }
+    for document in pallets_collection.find():
+        counterpartie = document["counterpartie_name"]
+        if counterpartie not in pallets_data:
+            pallets_data[counterpartie] = {
+                "amount": 0,
+                "price": 0
+            }
+
+        # Iterate over each pallet in the document
+        for pallet in document["pallets"]:
+            pallets_data[counterpartie]["amount"] += float(pallet["pallet_amount"])
+            pallets_data[counterpartie]["price"] += float(pallet["pallet_total_price"])
+
     return pallets_data
+
