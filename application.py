@@ -3,6 +3,7 @@ import pymongo
 import config
 from flask import Flask, request, Response, jsonify
 from flask_cors import CORS
+from flask_mail import Mail, Message
 from pymongo import MongoClient
 import jwt
 from bson import json_util, ObjectId
@@ -29,8 +30,18 @@ from analytics_functions import (
     get_contracts_stats, sale_products_report, defective_products_report, pallets_report
 )
 
-
 application = Flask(__name__)
+
+# Flask-Mail configuration for Gmail
+application.config['MAIL_SERVER'] = 'smtp.gmail.com'
+application.config['MAIL_PORT'] = 587
+application.config['MAIL_USERNAME'] = 'your_email@gmail.com'  # Replace with your Gmail address
+application.config['MAIL_PASSWORD'] = 'your_email_password'    # Replace with your Gmail password
+application.config['MAIL_USE_TLS'] = True
+application.config['MAIL_USE_SSL'] = False
+application.config['MAIL_DEFAULT_SENDER'] = 'your_email@gmail.com'  # Replace with your Gmail address
+mail = Mail(application)
+
 CORS(application)
 application.config['SECRET_KEY'] = config.SECRET_KEY
 SECRET_KEY = config.SECRET_KEY
@@ -206,13 +217,16 @@ def register():
 def add_task():
     data = request.get_json()
     access_token = data.get('access_token')
+
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+
     headline = data.get('headline')
     responsible = data.get('responsible')
     deadline = data.get('deadline')
     description = data.get('description')
     status = data.get('status', None)
+
     if status:
         status_doc = statuses_collection.find_one({'status': status})
         if status_doc:
@@ -221,13 +235,45 @@ def add_task():
     today = datetime.today()
     formatted_date = today.strftime("%a %b %d %Y")
 
-    document = {'date': formatted_date,
-                'headline': headline,
-                'responsible': responsible,
-                'deadline': deadline,
-                'description': description,
-                'status': status_doc}
+    document = {
+        'date': formatted_date,
+        'headline': headline,
+        'responsible': responsible,
+        'deadline': deadline,
+        'description': description,
+        'status': status_doc
+    }
+
     tasks_collection.insert_one(document)
+
+    # Find the user's email
+    user = users_collection.find_one({'name': responsible})
+    if user:
+        user_email = user.get('email')
+        if user_email:
+            # Prepare the email
+            subject = "New Task Assigned"
+            body = f"""
+            Hello {responsible},
+
+            A new task has been assigned to you.
+
+            Task Details:
+            Headline: {headline}
+            Description: {description}
+            Deadline: {deadline}
+
+            Best Regards,
+            Your Task Management System
+            """
+            msg = Message(subject=subject,
+                          recipients=[user_email],
+                          body=body)
+            try:
+                mail.send(msg)
+            except Exception as e:
+                return jsonify({'message': 'Email failed to send', 'error': str(e)}), 500
+
     return jsonify({'message': True}), 200
 
 
@@ -1116,16 +1162,21 @@ def products():
             rest = product.get('Rest')
             series = product.get('Series')
             type = product.get('Type')
+            sort = product.get('Sort')
 
             if type == "1":
                 warehouse = 'Склад Сировини'
             elif type == '2':
                 warehouse = 'Склад Готової продукції'
 
-            if url == 'http://olimpia.comp.lviv.ua:8188/BaseWeb/hs/base?action=getreportrest':
-                subwarehouse = 'Етрус'
-            else:
+            if url == 'http://olimpia.comp.lviv.ua:8188/BaseWeb1/hs/base?action=getreportrest' and sort == '1':
                 subwarehouse = 'Фастпол'
+                sort = 'Бобо'
+            elif url == 'http://olimpia.comp.lviv.ua:8188/BaseWeb1/hs/base?action=getreportrest' and sort == '2':
+                subwarehouse = 'Фастпол'
+                sort = 'Печиво'
+            else:
+                subwarehouse = 'Етрус'
 
             # Retrieve the current 'recommended_rest' from the dictionary
             recommended_rest = existing_products_dict.get(code, '')
@@ -1137,6 +1188,7 @@ def products():
                 'series': series,
                 'warehouse': warehouse,
                 'subwarehouse': subwarehouse,
+                'sort': sort,
                 'recommended_rest': recommended_rest,
                 'type': '1c'
             }
@@ -1159,6 +1211,7 @@ def products():
     per_page = data.get('per_page', 10)
     warehouse = data.get('warehouse')
     subwarehouse = data.get('subwarehouse')
+    sort = data.get('sort')
 
     filter_criteria = {}
     if keyword:
@@ -1170,6 +1223,9 @@ def products():
     if subwarehouse:
         regex_pattern = f'.*{re.escape(subwarehouse)}.*'
         filter_criteria['subwarehouse'] = {'$regex': regex_pattern, '$options': 'i'}
+    if sort:
+        regex_pattern = f'.*{re.escape(sort)}.*'
+        filter_criteria['sort'] = {'$regex': regex_pattern, '$options': 'i'}
 
     total_products = products_collection.count_documents(filter_criteria)
     total_pages = math.ceil(total_products / per_page)
