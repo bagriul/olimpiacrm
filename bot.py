@@ -22,6 +22,8 @@ orders_collection = db['orders']
 counterparties_collection = db['counterparties']
 manufactured_products_collection = db['manufactured_products']
 used_raw_collection = db['used_raw']
+defective_products_collection = db['defective_products']
+pallets_collection = db['pallets']
 
 # Your Telegram Bot token
 bot_token = config.bot_token
@@ -33,6 +35,27 @@ main_menu_markup.add(types.KeyboardButton("Звіт мерчандайзера")
 main_menu_markup.add(types.KeyboardButton("Створити замовлення"))
 main_menu_markup.add(types.KeyboardButton("Внести інформацію про кількість виробленої продукції"))
 main_menu_markup.add(types.KeyboardButton('Внести інформацію про кількість використаної сировини'))
+main_menu_markup.add(types.KeyboardButton('Бракована продукція'))
+main_menu_markup.add(types.KeyboardButton('Піддони'))
+
+
+def get_warehouse_data(warehouse_name):
+    """Функція для отримання даних зі складу"""
+    if warehouse_name == 'Етрус':
+        url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest'
+    elif warehouse_name == 'Фастпол':
+        url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
+    else:
+        raise ValueError(f"Невідомий склад: {warehouse_name}")
+
+    response = requests.get(url, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
+
+    if response.status_code != 200:
+        raise Exception(f"Помилка запиту: {response.status_code}")
+
+    # Парсимо XML відповідь
+    xml_string = response.text
+    return ET.fromstring(xml_string)
 
 
 # Callback function for the /start command
@@ -204,29 +227,42 @@ def confirmation(message):
 user_data = {}
 
 
+# Функція для вибору складу
 @bot.message_handler(func=lambda message: message.text == "Створити замовлення", content_types=['text'])
-def ask_product(message):
-    global user_data
-    user_data = {'product': []}
+def choose_warehouse(message):
+    keyboard = types.InlineKeyboardMarkup()
+    etrus_button = types.InlineKeyboardButton(text="Етрус", callback_data="warehouse_etrus")
+    fastpol_button = types.InlineKeyboardButton(text="Фастпол", callback_data="warehouse_fastpol")
+    keyboard.add(etrus_button, fastpol_button)
+    bot.send_message(message.from_user.id, 'Оберіть склад:', reply_markup=keyboard)
 
-    counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
-    if counterpartie['warehouse'] == 'Етрус':
-        url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest'
-    elif counterpartie['warehouse'] == 'Фастпол':
-        url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
 
-    response = requests.get(url, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
-    xml_string = response.text
-    root = ET.fromstring(xml_string)
+# Обробник вибору складу і запит на продукти
+@bot.callback_query_handler(func=lambda call: call.data.startswith('warehouse_'))
+def ask_product(call):
+    if call.data == "warehouse_etrus":
+        warehouse_name = 'Етрус'
+    elif call.data == "warehouse_fastpol":
+        warehouse_name = 'Фастпол'
+
+    try:
+        # Використання функції для запиту даних зі складу
+        root = get_warehouse_data(warehouse_name)
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"Виникла помилка: {e}")
+        return
+
+    # Створення клавіатури для вибору продуктів
     keyboard = types.InlineKeyboardMarkup()
     for product in root.findall('Product'):
         code = product.get('Code')
         good = product.get('Good')
         type = product.get('Type')
-        if type == '2':
+        if type == '2':  # Фільтруємо продукти за типом
             button = types.InlineKeyboardButton(text=good, callback_data=f"orderproduct_{code}")
             keyboard.add(button)
-    bot.send_message(message.from_user.id, 'Виберіть необхідний продукт', reply_markup=keyboard)
+
+    bot.send_message(call.message.chat.id, 'Виберіть необхідний продукт', reply_markup=keyboard)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('orderproduct'))
 def callback_inline(call):
@@ -289,39 +325,57 @@ def save_data_to_mongo(message):
         bot.send_message(message.from_user.id, 'Помилка надсилання даних')
 
 
+# Функція для вибору складу
 @bot.message_handler(func=lambda message: message.text == "Внести інформацію про кількість виробленої продукції", content_types=['text'])
-def ask_manufactured(message):
+def choose_warehouse_for_manufactured(message):
+    keyboard = types.InlineKeyboardMarkup()
+    etrus_button = types.InlineKeyboardButton(text="Етрус", callback_data="manufactured_warehouse_etrus")
+    fastpol_button = types.InlineKeyboardButton(text="Фастпол", callback_data="manufactured_warehouse_fastpol")
+    keyboard.add(etrus_button, fastpol_button)
+    bot.send_message(message.from_user.id, 'Оберіть склад:', reply_markup=keyboard)
+
+# Обробник вибору складу і запит на продукти для виробленої продукції
+@bot.callback_query_handler(func=lambda call: call.data.startswith('manufactured_warehouse_'))
+def ask_manufactured(call):
     global user_data
     user_data = {'product': []}
 
-    counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
-    if counterpartie['warehouse'] == 'Етрус':
-        url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest'
-    elif counterpartie['warehouse'] == 'Фастпол':
-        url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
+    # Визначаємо склад на основі вибору користувача
+    if call.data == "manufactured_warehouse_etrus":
+        warehouse_name = 'Етрус'
+        warehouse_name_short = 'e'
+    elif call.data == "manufactured_warehouse_fastpol":
+        warehouse_name = 'Фастпол'
+        warehouse_name_short = 'f'
 
-    response = requests.get(url, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
-    xml_string = response.text
-    root = ET.fromstring(xml_string)
+    try:
+        # Використання універсальної функції для запиту даних зі складу
+        root = get_warehouse_data(warehouse_name)
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"Виникла помилка: {e}")
+        return
+
+    # Створюємо клавіатуру для вибору продуктів
     keyboard = types.InlineKeyboardMarkup()
     for product in root.findall('Product'):
         code = product.get('Code')
         good = product.get('Good')
         type = product.get('Type')
-        if type == '2':
-            button = types.InlineKeyboardButton(text=good, callback_data=f"manufacturedproduct_{code}")
+        if type == '2':  # Фільтруємо продукти за типом
+            button = types.InlineKeyboardButton(text=good, callback_data=f"mp_{code}_{warehouse_name_short}")
             keyboard.add(button)
-    bot.send_message(message.from_user.id, 'Виберіть необхідний продукт', reply_markup=keyboard)
+
+    bot.send_message(call.message.chat.id, 'Виберіть необхідний продукт для внесення інформації про вироблену кількість', reply_markup=keyboard)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('manufacturedproduct'))
+@bot.callback_query_handler(func=lambda call: call.data.startswith('mp_'))
 def ask_amount(call):
     code = call.data.split('_')[1]
+    warehouse_name = call.data.split('_')[2]
 
-    counterpartie = counterparties_collection.find_one({'telegramID': call.from_user.id})
-    if counterpartie['warehouse'] == 'Етрус':
+    if warehouse_name == 'e':
         url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest'
-    elif counterpartie['warehouse'] == 'Фастпол':
+    elif warehouse_name == 'f':
         url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
     response = requests.get(url, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
     xml_string = response.text
@@ -364,59 +418,77 @@ def confirm_manufactured(message, code, good):
             bot.send_message(message.from_user.id, 'Помилка надсилання даних')
 
 
+# Функція для вибору складу
 @bot.message_handler(func=lambda message: message.text == "Внести інформацію про кількість використаної сировини", content_types=['text'])
-def ask_manufactured(message):
+def choose_warehouse_for_raw_materials(message):
+    keyboard = types.InlineKeyboardMarkup()
+    etrus_button = types.InlineKeyboardButton(text="Етрус", callback_data="raw_warehouse_etrus")
+    fastpol_button = types.InlineKeyboardButton(text="Фастпол", callback_data="raw_warehouse_fastpol")
+    keyboard.add(etrus_button, fastpol_button)
+    bot.send_message(message.from_user.id, 'Оберіть склад:', reply_markup=keyboard)
+
+# Обробник вибору складу і запит на продукти для сировини
+@bot.callback_query_handler(func=lambda call: call.data.startswith('raw_warehouse_'))
+def ask_used_raw_materials(call):
     global user_data
     user_data = {'product': []}
 
-    counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
-    if counterpartie['warehouse'] == 'Етрус':
-        url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest'
-    elif counterpartie['warehouse'] == 'Фастпол':
-        url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
+    # Визначаємо склад на основі вибору користувача
+    if call.data == "raw_warehouse_etrus":
+        warehouse_name = 'Етрус'
+        warehouse_name_short = 'e'
+    elif call.data == "raw_warehouse_fastpol":
+        warehouse_name = 'Фастпол'
+        warehouse_name_short = 'f'
 
-    response = requests.get(url, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
-    xml_string = response.text
-    root = ET.fromstring(xml_string)
+    try:
+        # Використання універсальної функції для запиту даних зі складу
+        root = get_warehouse_data(warehouse_name)
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"Виникла помилка: {e}")
+        return
+
+    # Створюємо клавіатуру для вибору сировини (type == '1' для сировини)
     keyboard = types.InlineKeyboardMarkup()
     for product in root.findall('Product'):
         code = product.get('Code')
         good = product.get('Good')
         type = product.get('Type')
-        if type == '1':
-            button = types.InlineKeyboardButton(text=good, callback_data=f"usedraw_{code}")
+        if type == '1':  # Фільтруємо продукти за типом сировини
+            button = types.InlineKeyboardButton(text=good, callback_data=f"usedraw_{code}_{warehouse_name_short}")
             keyboard.add(button)
-    bot.send_message(message.from_user.id, 'Виберіть необхідний продукт', reply_markup=keyboard)
+
+    bot.send_message(call.message.chat.id, 'Виберіть необхідну сировину для внесення інформації про використання', reply_markup=keyboard)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('usedraw'))
 def ask_used(call):
     raw_code = call.data.split('_')[1]
+    warehouse_name_short = call.data.split('_')[2]
 
     msg = bot.send_message(call.from_user.id, 'Введіть кількість сировини, яка пішла у виробництво')
-    bot.register_next_step_handler(msg, confirm_used, raw_code)
+    bot.register_next_step_handler(msg, confirm_used, raw_code, warehouse_name_short)
 
 
-def confirm_used(message, raw_code):
+def confirm_used(message, raw_code, warehouse_name_short):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
         used_amount = int(message.text)
 
         msg = bot.send_message(message.from_user.id, 'Введіть кількість браку')
-        bot.register_next_step_handler(msg, ask_defect, used_amount, raw_code)
+        bot.register_next_step_handler(msg, ask_defect, used_amount, raw_code, warehouse_name_short)
 
 
-def ask_defect(message, used_amount, raw_code):
+def ask_defect(message, used_amount, raw_code, warehouse_name_short):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
         defect_amount = int(message.text)
 
-        counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
-        if counterpartie['warehouse'] == 'Етрус':
+        if warehouse_name_short == 'e':
             url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest'
-        elif counterpartie['warehouse'] == 'Фастпол':
+        elif warehouse_name_short == 'f':
             url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
         response = requests.get(url, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
         xml_string = response.text
@@ -435,6 +507,196 @@ def ask_defect(message, used_amount, raw_code):
                                         'defect': defect_amount,
                                         'date': datetime.now()})
         bot.send_message(message.from_user.id, 'Дані успішно надіслано')
+
+
+# Змінні для зберігання всієї бракованої продукції
+defective_products = []
+
+@bot.message_handler(func=lambda message: message.text == "Бракована продукція", content_types=['text'])
+def handle_defective_product_collection(message):
+    global defective_products
+    defective_products = []  # Очищення списку перед новим звітом
+    bot.send_message(message.chat.id, "Яка назва продукту?")
+    bot.register_next_step_handler(message, defective_product_name)
+
+# Callback function to collect the defective product name
+def defective_product_name(message):
+    if message.text == '/cancel':
+        cancel_handel(message)
+    else:
+        global defective_product_name
+        defective_product_name = message.text
+        bot.reply_to(message, "Яка дата повернення? (У форматі рік-місяць-день)")
+        bot.register_next_step_handler(message, return_date)
+
+# Callback function to collect the return date
+def return_date(message):
+    if message.text == '/cancel':
+        cancel_handel(message)
+    else:
+        global return_date
+        return_date = message.text
+        bot.reply_to(message, "Яка кількість?")
+        bot.register_next_step_handler(message, defective_product_amount)
+
+# Callback function to collect the defective product amount
+def defective_product_amount(message):
+    if message.text == '/cancel':
+        cancel_handel(message)
+    else:
+        global defective_product_amount
+        defective_product_amount = message.text
+        bot.reply_to(message, "Яка загальна вартість?")
+        bot.register_next_step_handler(message, defective_product_price)
+
+# Callback function to collect the defective product total price
+def defective_product_price(message):
+    if message.text == '/cancel':
+        cancel_handel(message)
+    else:
+        global defective_product_price
+        defective_product_price = message.text
+
+        # Додаємо інформацію про браковану продукцію у список
+        defective_products.append({
+            'product_name': defective_product_name,
+            'return_date': return_date,
+            'amount': defective_product_amount,
+            'total_price': defective_product_price
+        })
+
+        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+        markup.add(types.KeyboardButton('Додати ще'), types.KeyboardButton('Закінчити'))
+        bot.reply_to(message, "Ви можете додати ще одну браковану продукцію або завершити введення.", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text.lower() in ['додати ще', 'закінчити'])
+def add_or_finish_defective(message):
+    if message.text.lower() == 'додати ще продукцію':
+        bot.reply_to(message, "Яка назва продукту?")
+        bot.register_next_step_handler(message, defective_product_name)
+    else:
+        # Підтвердження всіх бракованих продуктів
+        bot.reply_to(message, "Ось інформація про всі браковані продукти:")
+        for i, defective_product in enumerate(defective_products, start=1):
+            bot.send_message(message.chat.id, f"Продукт {i}:\n"
+                                              f"Назва: {defective_product['product_name']}\n"
+                                              f"Дата повернення: {defective_product['return_date']}\n"
+                                              f"Кількість: {float(defective_product['amount'])}\n"
+                                              f"Загальна вартість: {float(defective_product['total_price'])}\n")
+
+        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+        markup.add(types.KeyboardButton('Затвердити'), types.KeyboardButton('Відмінити'))
+        bot.reply_to(message, "Якщо все гаразд, натисніть 'Підтвердити', щоб надіслати інформацію", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text.lower() in ['затвердити', 'відмінити'])
+def confirmation_defective(message):
+    if message.text.lower() == 'затвердити':
+        counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
+        # Зберігаємо дані до MongoDB
+        data_to_save = {
+            'defective_products': defective_products,
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'counterpartie_name': counterpartie['name'],
+            'counterpartie_code': counterpartie['code']
+        }
+        defective_products_collection.insert_one(data_to_save)
+        bot.reply_to(message, "Інформація про браковану продукцію успішно надіслана")
+        bot.send_message(message.chat.id, "Головне меню", reply_markup=main_menu_markup)
+    else:
+        bot.reply_to(message, "Операція скасована")
+        bot.send_message(message.chat.id, "Головне меню", reply_markup=main_menu_markup)
+
+
+# Змінні для зберігання всіх піддонів
+pallets = []
+
+
+@bot.message_handler(func=lambda message: message.text == "Піддони", content_types=['text'])
+def handle_pallet_collection(message):
+    global pallets
+    pallets = []  # Очищення списку перед новим звітом
+
+    # Автоматичне завантаження контрагента з бази даних
+    counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
+    if not counterpartie:
+        bot.reply_to(message, "Контрагент не знайдений. Спробуйте ще раз або зверніться до підтримки.")
+        return
+
+    global counterpartie_name
+    counterpartie_name = counterpartie['name']
+
+    bot.send_message(message.chat.id, f"Контрагент: {counterpartie_name}")
+    bot.send_message(message.chat.id, "Яка кількість піддонів?")
+    bot.register_next_step_handler(message, pallet_amount)
+
+
+# Callback function to collect the pallet amount
+def pallet_amount(message):
+    if message.text == '/cancel':
+        cancel_handel(message)
+    else:
+        global pallet_amount
+        pallet_amount = message.text
+        bot.reply_to(message, "Яка загальна вартість піддонів?")
+        bot.register_next_step_handler(message, pallet_total_price)
+
+
+# Callback function to collect the pallet total price
+def pallet_total_price(message):
+    if message.text == '/cancel':
+        cancel_handel(message)
+    else:
+        global pallet_total_price
+        pallet_total_price = message.text
+
+        # Додаємо інформацію про піддони у список
+        pallets.append({
+            'counterpartie_name': counterpartie_name,
+            'pallet_amount': pallet_amount,
+            'pallet_total_price': pallet_total_price
+        })
+
+        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+        markup.add(types.KeyboardButton('Додати'), types.KeyboardButton('Припинити'))
+        bot.reply_to(message, "Ви можете додати ще одні піддони або завершити введення.", reply_markup=markup)
+
+
+@bot.message_handler(func=lambda message: message.text.lower() in ['додати', 'припинити'])
+def add_or_finish_pallets(message):
+    if message.text.lower() == 'додати':
+        bot.reply_to(message, "Яка кількість піддонів?")
+        bot.register_next_step_handler(message, pallet_amount)
+    else:
+        # Підтвердження всіх піддонів
+        bot.reply_to(message, "Ось інформація про всі піддони:")
+        for i, pallet in enumerate(pallets, start=1):
+            bot.send_message(message.chat.id, f"Піддон {i}:\n"
+                                              f"Контрагент: {pallet['counterpartie_name']}\n"
+                                              f"Кількість: {float(pallet['pallet_amount'])}\n"
+                                              f"Загальна вартість: {float(pallet['pallet_total_price'])}\n")
+
+        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+        markup.add(types.KeyboardButton('Погодити'), types.KeyboardButton('Відмовити'))
+        bot.reply_to(message, "Якщо все гаразд, натисніть 'Підтвердити', щоб надіслати інформацію", reply_markup=markup)
+
+
+@bot.message_handler(func=lambda message: message.text.lower() in ['погодити', 'відмовити'])
+def confirmation_pallets(message):
+    if message.text.lower() == 'погодити':
+        counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
+        # Зберігаємо дані до MongoDB
+        data_to_save = {
+            'pallets': pallets,
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'counterpartie_name': counterpartie['name'],
+            'counterpartie_code': counterpartie['code']
+        }
+        pallets_collection.insert_one(data_to_save)
+        bot.reply_to(message, "Інформація про піддони успішно надіслана")
+        bot.send_message(message.chat.id, "Головне меню", reply_markup=main_menu_markup)
+    else:
+        bot.reply_to(message, "Операція скасована")
+        bot.send_message(message.chat.id, "Головне меню", reply_markup=main_menu_markup)
 
 
 if __name__ == '__main__':
