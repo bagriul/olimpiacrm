@@ -486,8 +486,12 @@ def generate_unique_filename(original_filename):
 def add_contract():
     data = request.form
     access_token = data.get('access_token')
+
+    # Check token
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+
+    # Extract contract data
     number = data.get('number')
     counterpartie = data.get('counterpartie')
     category = data.get('category')
@@ -497,47 +501,47 @@ def add_contract():
     status = data.get('status', None)
     original_document = data.get('original_document', None)
     is_valid = data.get('is_valid', None)
+    subwarehouse = data.get('subwarehouse')  # Extract subwarehouse field
+
+    # Handle status
+    status_doc = None
     if status:
         status_doc = statuses_collection.find_one({'status': status})
         if status_doc:
             del status_doc['_id']
-    scans = request.files.getlist('scans')
 
-    document = {'date': date,
-                'number': number,
-                'counterpartie': counterpartie,
-                'category': category,
-                'deadline': deadline,
-                'subject': subject,
-                'status': status_doc,
-                'original_document': original_document,
-                'is_valid': is_valid}
+    # Handle scans upload
+    scans = request.files.getlist('scans')
     scans_links_list = []
     for scan in scans:
-        # Create an in-memory file-like object
+        # Create in-memory file object
         file_stream = io.BytesIO()
         scan.save(file_stream)
         file_stream.seek(0)
 
-        def generate_unique_filename(original_filename):
-            current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
-
-            unique_identifier = str(uuid.uuid4())
-
-            # Extract the file extension from the original filename
-            file_extension = original_filename.rsplit('.', 1)[-1].lower()
-
-            unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
-
-            return unique_filename
-
         unique_filename = generate_unique_filename(scan.filename)
 
-        # Upload the file directly to S3
-        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}', ExtraArgs={'ACL': 'public-read'})
+        # Upload file to S3
+        config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}',
+                                        ExtraArgs={'ACL': 'public-read'})
         scans_links_list.append(f'https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{unique_filename}')
 
-    document['scans_links'] = scans_links_list
+    # Create the document
+    document = {
+        'date': date,
+        'number': number,
+        'counterpartie': counterpartie,
+        'category': category,
+        'deadline': deadline,
+        'subject': subject,
+        'status': status_doc,
+        'original_document': original_document,
+        'is_valid': is_valid,
+        'subwarehouse': subwarehouse,  # Add subwarehouse to the document
+        'scans_links': scans_links_list
+    }
+
+    # Insert document into the database
     contracts_collection.insert_one(document)
     return jsonify({'message': True}), 200
 
@@ -546,15 +550,19 @@ def add_contract():
 def update_contract():
     data = request.form
     access_token = data.get('access_token')
+
+    # Check token
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
 
+    # Find contract by ID
     contract_id = data.get('contract_id')
     contract = contracts_collection.find_one({'_id': ObjectId(contract_id)})
+
     if contract is None:
         return jsonify({'message': False}), 404
 
-    # Update fields based on the provided data
+    # Update fields
     contract['date'] = data.get('date', contract['date'])
     contract['number'] = data.get('number', contract['number'])
     contract['counterpartie'] = data.get('counterpartie', contract['counterpartie'])
@@ -563,52 +571,47 @@ def update_contract():
     contract['subject'] = data.get('subject', contract['subject'])
     contract['original_document'] = data.get('original_document', contract['original_document'])
     contract['is_valid'] = data.get('is_valid', contract['is_valid'])
+    contract['subwarehouse'] = data.get('subwarehouse', contract.get('subwarehouse'))  # Update subwarehouse field
+
+    # Handle status
     status = data.get('status')
     if status:
         status_doc = statuses_collection.find_one({'status': status})
         if status_doc:
             del status_doc['_id']
         contract['status'] = status_doc
+
+    # Update contract in the database
     contracts_collection.update_one({'_id': ObjectId(contract_id)}, {'$set': contract})
 
+    # Handle scans deletion
     delete_scans = data.get('delete_scans')
-    scans = request.files.getlist('scans')
-
     if delete_scans:
-        # Delete files not in new scans_links but present in old contract['scans_links']
         for scan_link in contract['scans_links']:
             if scan_link in delete_scans:
-                # Extract file key from the old_scan_link
                 file_key = scan_link.split('/')[-1]
                 config.s3_client.delete_object(Bucket='olimpiabucket', Key=f'contracts/{file_key}')
                 contracts_collection.find_one_and_update({'_id': ObjectId(contract_id)},
-                                                         {"$pull": {"scans_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{file_key}"}})
+                                                         {"$pull": {
+                                                             "scans_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{file_key}"}})
 
+    # Handle scans upload
+    scans = request.files.getlist('scans')
     if scans:
         for scan in scans:
-            # Create an in-memory file-like object
+            # Create in-memory file object
             file_stream = io.BytesIO()
             scan.save(file_stream)
             file_stream.seek(0)
 
-            def generate_unique_filename(original_filename):
-                current_timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
-
-                unique_identifier = str(uuid.uuid4())
-
-                # Extract the file extension from the original filename
-                file_extension = original_filename.rsplit('.', 1)[-1].lower()
-
-                unique_filename = f"{current_timestamp}_{unique_identifier}.{file_extension}"
-
-                return unique_filename
-
             unique_filename = generate_unique_filename(scan.filename)
 
-            # Upload the file directly to S3
-            config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}', ExtraArgs={'ACL': 'public-read'})
+            # Upload file to S3
+            config.s3_client.upload_fileobj(file_stream, 'olimpiabucket', f'contracts/{unique_filename}',
+                                            ExtraArgs={'ACL': 'public-read'})
             contracts_collection.find_one_and_update({'_id': ObjectId(contract_id)},
-                                                     {"$push": {"scans_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{unique_filename}"}})
+                                                     {"$push": {
+                                                         "scans_links": f"https://olimpiabucket.fra1.digitaloceanspaces.com/contracts/{unique_filename}"}})
 
     return jsonify({'message': True}), 200
 
@@ -1138,8 +1141,8 @@ def products():
 
     username = 'CRM'
     password = 'CegJr6YcK1sTnljgTIly'
-    urls = ['http://olimpia.comp.lviv.ua:8188/BaseWeb/hs/base?action=getreportrest',
-            'http://olimpia.comp.lviv.ua:8188/BaseWeb1/hs/base?action=getreportrest']
+    urls = ['https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest',
+            'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest']
 
     # Fetch existing products once and store in a dictionary
     existing_products = products_collection.find({}, {'code': 1, 'recommended_rest': 1})
@@ -1169,10 +1172,10 @@ def products():
             elif type == '2':
                 warehouse = 'Склад Готової продукції'
 
-            if url == 'http://olimpia.comp.lviv.ua:8188/BaseWeb1/hs/base?action=getreportrest' and sort == '1':
+            if url == 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest' and sort == '1':
                 subwarehouse = 'Фастпол'
                 sort = 'Бобо'
-            elif url == 'http://olimpia.comp.lviv.ua:8188/BaseWeb1/hs/base?action=getreportrest' and sort == '2':
+            elif url == 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest' and sort == '2':
                 subwarehouse = 'Фастпол'
                 sort = 'Печиво'
             else:
@@ -1261,6 +1264,7 @@ def add_product():
         return jsonify({'token': False}), 401
 
     product_type = data.get('type')
+    subwarehouse = data.get('subwarehouse')  # Extract subwarehouse from form data
 
     # Handle workwear product type
     if product_type == 'workwear':
@@ -1280,7 +1284,7 @@ def add_product():
             'lifetime': lifetime,
             'rest': rest,
             'warehouse': 'Склад Спецодягу',
-            'subwarehouse': employee,
+            'subwarehouse': subwarehouse,  # Use the subwarehouse field
             'recommended_rest': recommended_rest,
             'type': 'workwear'
         }
@@ -1300,7 +1304,7 @@ def add_product():
             'price': price,
             'sum': sum,
             'warehouse': "Склад Дистриб'ютора",
-            'subwarehouse': distributor,
+            'subwarehouse': subwarehouse,  # Use the subwarehouse field
             'recommended_rest': recommended_rest,
             'type': 'distributor'
         }
@@ -1576,6 +1580,7 @@ def analytics():
     end_date = data.get('end_date')
     data_types = data.get('data_type', [])
     access_token = data.get('access_token')
+    subwarehouse = data.get('subwarehouse')
 
     if not check_token(access_token):
         return jsonify({'token': False}), 401
@@ -1592,13 +1597,13 @@ def analytics():
         'total_amount_manufactured_by_good': get_total_amount_manufactured_by_good,
         'total_used_raw': get_total_used_raw,
         'defect_raw_percentage': get_defect_raw_percentage,
+        'total_price_workwear': get_total_price_for_workwear,
         'total_contracts': get_contracts_stats,  # No need for lambda here
         'expiring_contracts': get_contracts_stats  # No need for lambda here
     }
 
     functions_without_dates = {
         'total_rest_by_warehouse': get_total_rest_by_warehouse,
-        'total_price_workwear': get_total_price_for_workwear,
         'low_stock_products': get_low_stock_products,
         'products_with_expired_series': get_products_with_expired_series,
         'total_amount_distributor': get_total_amount_for_distributor,
@@ -1613,7 +1618,7 @@ def analytics():
     for data_type in data_types:
         if data_type in functions_with_dates:
             func = functions_with_dates[data_type]
-            result = func(start_date, end_date)
+            result = func(start_date, end_date, subwarehouse)
 
             # Special handling for get_contracts_stats to extract correct value
             if data_type == 'total_contracts':
@@ -1627,7 +1632,7 @@ def analytics():
     for data_type in data_types:
         if data_type in functions_without_dates:
             func = functions_without_dates[data_type]
-            response_data[data_type] = func()
+            response_data[data_type] = func(subwarehouse)
 
     return jsonify(response_data), 200
 

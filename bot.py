@@ -104,8 +104,24 @@ def shop_name(message):
     else:
         global name_shop
         name_shop = message.text
+        # Now ask for subwarehouse
+        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+        markup.add(types.KeyboardButton('Фастпол'), types.KeyboardButton('Етрус'))
+        bot.reply_to(message, "Оберіть субсклад (Фастпол або Етрус):", reply_markup=markup)
+        bot.register_next_step_handler(message, subwarehouse)
+
+# New function to handle subwarehouse selection
+def subwarehouse(message):
+    if message.text == '/cancel':
+        cancel_handel(message)
+    elif message.text in ['Фастпол', 'Етрус']:
+        global selected_subwarehouse
+        selected_subwarehouse = message.text
         bot.reply_to(message, "Яка назва товару?")
         bot.register_next_step_handler(message, product_name)
+    else:
+        bot.reply_to(message, "Будь ласка, оберіть один із варіантів: Фастпол або Етрус")
+        bot.register_next_step_handler(message, subwarehouse)
 
 # Callback function to collect the product name
 def product_name(message):
@@ -204,18 +220,32 @@ def add_or_finish(message):
         markup.add(types.KeyboardButton('Підтвердити'), types.KeyboardButton('Скасувати'))
         bot.reply_to(message, "Якщо все гаразд, натисніть 'Підтвердити', щоб надіслати інформацію", reply_markup=markup)
 
+
 @bot.message_handler(func=lambda message: message.text.lower() in ['підтвердити', 'скасувати'])
 def confirmation(message):
     if message.text.lower() == 'підтвердити':
         counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
-        # Зберігаємо дані до MongoDB
+
+        # Calculate the total sum of product_price and sale_price
+        total_sum = 0
+        for product in products:
+            product_price = float(product['product_price']) if product['product_price'] else 0
+            sale_price = float(product['sale_price']) if product['sale_price'] else 0
+            total_sum += (product_price * float(product['product_amount'])) + (sale_price * float(product['sale_amount']))
+
+        # Prepare data to save, including the total sum
         data_to_save = {
             'shop_name': name_shop,
+            'subwarehouse': selected_subwarehouse,  # Add subwarehouse to the saved data
             'products': products,
             'date': datetime.now().strftime('%Y-%m-%d'),
             'counterpartie_name': counterpartie['name'],
-            'counterpartie_code': counterpartie['code']
+            'counterpartie_code': counterpartie['code'],
+            'counterpartie_warehouse': counterpartie['warehouse'],
+            'total_price_sum': total_sum  # Total sum field
         }
+
+        # Save to MongoDB
         merchants_reports_collection.insert_one(data_to_save)
         bot.reply_to(message, "Інформація успішно надіслана")
         bot.send_message(message.chat.id, "Головне меню", reply_markup=main_menu_markup)
@@ -240,10 +270,19 @@ def choose_warehouse(message):
 # Обробник вибору складу і запит на продукти
 @bot.callback_query_handler(func=lambda call: call.data.startswith('warehouse_'))
 def ask_product(call):
-    if call.data == "warehouse_etrus":
-        warehouse_name = 'Етрус'
-    elif call.data == "warehouse_fastpol":
-        warehouse_name = 'Фастпол'
+    try:
+        if call.data == "warehouse_etrus":
+            warehouse_name = 'Етрус'
+            warehouse_name_short = 'e'
+        elif call.data == "warehouse_fastpol":
+            warehouse_name = 'Фастпол'
+            warehouse_name_short = 'f'
+    except AttributeError:
+        warehouse_name = user_data['product'][0]['subwarehouse']
+        if warehouse_name == 'Етрус':
+            warehouse_name_short = 'e'
+        elif warehouse_name == 'Фастпол':
+            warehouse_name_short = 'f'
 
     try:
         # Використання функції для запиту даних зі складу
@@ -259,14 +298,23 @@ def ask_product(call):
         good = product.get('Good')
         type = product.get('Type')
         if type == '2':  # Фільтруємо продукти за типом
-            button = types.InlineKeyboardButton(text=good, callback_data=f"orderproduct_{code}")
+            button = types.InlineKeyboardButton(text=good, callback_data=f"orderproduct_{code}_{warehouse_name_short}")
             keyboard.add(button)
 
-    bot.send_message(call.message.chat.id, 'Виберіть необхідний продукт', reply_markup=keyboard)
+    try:
+        bot.send_message(call.message.chat.id, 'Виберіть необхідний продукт', reply_markup=keyboard)
+    except AttributeError:
+        bot.send_message(call.from_user.id, 'Виберіть необхідний продукт', reply_markup=keyboard)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('orderproduct'))
 def callback_inline(call):
-    current_product = {'code': call.data.split('_')[1]}
+    if call.data.split('_')[2] == 'f':
+        subwarehouse = 'Фастпол'
+    elif call.data.split('_')[2] == 'e':
+        subwarehouse = 'Етрус'
+
+    current_product = {'code': call.data.split('_')[1],
+                       'subwarehouse': subwarehouse}
     msg = bot.send_message(call.from_user.id, "Введіть кількість товару:")
     bot.register_next_step_handler(msg, confirm_add_another_product, current_product)
 
@@ -274,6 +322,9 @@ def confirm_add_another_product(message, current_product):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
+        # Ініціалізуємо список продуктів, якщо його немає
+        if 'product' not in user_data:
+            user_data['product'] = []
         current_product['amount'] = int(message.text)
         user_data['product'].append(current_product)
         msg = bot.send_message(message.chat.id, "Додати ще один продукт? (так/ні)")
@@ -303,10 +354,9 @@ def save_data_to_mongo(message):
     user_data['status'] = {'name': 'Прийнято', 'colour': '#28BEFF'}
     user_data['payment_status'] = None
 
-    counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
-    if counterpartie['warehouse'] == 'Етрус':
+    if user_data["product"][0]["subwarehouse"] == 'Етрус':
         base_web = 'BaseWeb'
-    elif counterpartie['warehouse'] == 'Фастпол':
+    elif user_data["product"][0]["subwarehouse"] == 'Фастпол':
         base_web = 'BaseWeb1'
 
     user_data_without_status = user_data.copy()
@@ -371,11 +421,13 @@ def ask_manufactured(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mp_'))
 def ask_amount(call):
     code = call.data.split('_')[1]
-    warehouse_name = call.data.split('_')[2]
+    warehouse_name_short = call.data.split('_')[2]
 
-    if warehouse_name == 'e':
+    if warehouse_name_short == 'e':
+        warehouse_name = 'Етрус'
         url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest'
-    elif warehouse_name == 'f':
+    elif warehouse_name_short == 'f':
+        warehouse_name = 'Фастпол'
         url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
     response = requests.get(url, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
     xml_string = response.text
@@ -385,10 +437,10 @@ def ask_amount(call):
             good = product.get('Good')
 
     msg = bot.send_message(call.from_user.id, 'Введіть кількість виготовленої продукції')
-    bot.register_next_step_handler(msg, confirm_manufactured, code, good)
+    bot.register_next_step_handler(msg, confirm_manufactured, code, good, warehouse_name)
 
 
-def confirm_manufactured(message, code, good):
+def confirm_manufactured(message, code, good, warehouse_name):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
@@ -396,9 +448,9 @@ def confirm_manufactured(message, code, good):
         user_data['product'].append({'code': code, 'amount': amount})
 
         counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
-        if counterpartie['warehouse'] == 'Етрус':
+        if warehouse_name == 'Етрус':
             base_web = 'BaseWeb'
-        elif counterpartie['warehouse'] == 'Фастпол':
+        elif warehouse_name == 'Фастпол':
             base_web = 'BaseWeb1'
 
         request = requests.post(f'https://olimpia.comp.lviv.ua:8189/{base_web}/hs/base?action=CreateProduction',
@@ -410,6 +462,7 @@ def confirm_manufactured(message, code, good):
         if answer == 'ok':
             manufactured_products_collection.insert_one({'date': datetime.now(),
                                                          'document': production,
+                                                         'subwarehouse': warehouse_name,
                                                          'code': code,
                                                          'good': good,
                                                          'amount': amount})
@@ -487,8 +540,10 @@ def ask_defect(message, used_amount, raw_code, warehouse_name_short):
         defect_amount = int(message.text)
 
         if warehouse_name_short == 'e':
+            warehouse_name = 'Етрус'
             url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest'
         elif warehouse_name_short == 'f':
+            warehouse_name = "Фастпол"
             url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest'
         response = requests.get(url, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
         xml_string = response.text
@@ -502,6 +557,7 @@ def ask_defect(message, used_amount, raw_code, warehouse_name_short):
                 raw_name = good
 
         used_raw_collection.insert_one({'code': raw_code,
+                                        'subwarehouse': warehouse_name,
                                         'name': raw_name,
                                         'used': used_amount,
                                         'defect': defect_amount,
@@ -512,68 +568,61 @@ def ask_defect(message, used_amount, raw_code, warehouse_name_short):
 # Змінні для зберігання всієї бракованої продукції
 defective_products = []
 
+
 @bot.message_handler(func=lambda message: message.text == "Бракована продукція", content_types=['text'])
 def handle_defective_product_collection(message):
     global defective_products
     defective_products = []  # Очищення списку перед новим звітом
     bot.send_message(message.chat.id, "Яка назва продукту?")
-    bot.register_next_step_handler(message, defective_product_name)
+    bot.register_next_step_handler(message, defective_product_name, {})
 
-# Callback function to collect the defective product name
-def defective_product_name(message):
+
+def defective_product_name(message, product_data):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
-        global defective_product_name
-        defective_product_name = message.text
+        product_data['product_name'] = message.text
         bot.reply_to(message, "Яка дата повернення? (У форматі рік-місяць-день)")
-        bot.register_next_step_handler(message, return_date)
+        bot.register_next_step_handler(message, return_date, product_data)
 
-# Callback function to collect the return date
-def return_date(message):
+
+def return_date(message, product_data):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
-        global return_date
-        return_date = message.text
+        product_data['return_date'] = message.text
         bot.reply_to(message, "Яка кількість?")
-        bot.register_next_step_handler(message, defective_product_amount)
+        bot.register_next_step_handler(message, defective_product_amount, product_data)
 
-# Callback function to collect the defective product amount
-def defective_product_amount(message):
+
+def defective_product_amount(message, product_data):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
-        global defective_product_amount
-        defective_product_amount = message.text
+        product_data['amount'] = message.text
         bot.reply_to(message, "Яка загальна вартість?")
-        bot.register_next_step_handler(message, defective_product_price)
+        bot.register_next_step_handler(message, defective_product_price, product_data)
 
-# Callback function to collect the defective product total price
-def defective_product_price(message):
+
+def defective_product_price(message, product_data):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
-        global defective_product_price
-        defective_product_price = message.text
-
-        # Додаємо інформацію про браковану продукцію у список
-        defective_products.append({
-            'product_name': defective_product_name,
-            'return_date': return_date,
-            'amount': defective_product_amount,
-            'total_price': defective_product_price
-        })
+        product_data['total_price'] = message.text
+        defective_products.append(product_data)
 
         markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
         markup.add(types.KeyboardButton('Додати ще'), types.KeyboardButton('Закінчити'))
-        bot.reply_to(message, "Ви можете додати ще одну браковану продукцію або завершити введення.", reply_markup=markup)
+        bot.reply_to(message, "Ви можете додати ще одну браковану продукцію або завершити введення.",
+                     reply_markup=markup)
+
 
 @bot.message_handler(func=lambda message: message.text.lower() in ['додати ще', 'закінчити'])
 def add_or_finish_defective(message):
-    if message.text.lower() == 'додати ще продукцію':
+    if message.text.lower() == 'додати ще':
+        product_data = {}  # Create a new dictionary for the new product
         bot.reply_to(message, "Яка назва продукту?")
-        bot.register_next_step_handler(message, defective_product_name)
+        bot.register_next_step_handler(message, defective_product_name, product_data)
     else:
         # Підтвердження всіх бракованих продуктів
         bot.reply_to(message, "Ось інформація про всі браковані продукти:")
@@ -584,27 +633,29 @@ def add_or_finish_defective(message):
                                               f"Кількість: {float(defective_product['amount'])}\n"
                                               f"Загальна вартість: {float(defective_product['total_price'])}\n")
 
+        # Ask for subwarehouse selection
         markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
-        markup.add(types.KeyboardButton('Затвердити'), types.KeyboardButton('Відмінити'))
-        bot.reply_to(message, "Якщо все гаразд, натисніть 'Підтвердити', щоб надіслати інформацію", reply_markup=markup)
+        markup.add(types.KeyboardButton('Фастпол'), types.KeyboardButton('Етрус'))
+        bot.reply_to(message, "Оберіть субсклад (Фастпол або Етрус):", reply_markup=markup)
+        bot.register_next_step_handler(message, confirmation_defective)
 
-@bot.message_handler(func=lambda message: message.text.lower() in ['затвердити', 'відмінити'])
+
+@bot.message_handler(func=lambda message: message.text.lower() in ['фастпол', 'етрус'])
 def confirmation_defective(message):
-    if message.text.lower() == 'затвердити':
-        counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
-        # Зберігаємо дані до MongoDB
-        data_to_save = {
-            'defective_products': defective_products,
-            'date': datetime.now().strftime('%Y-%m-%d'),
-            'counterpartie_name': counterpartie['name'],
-            'counterpartie_code': counterpartie['code']
-        }
-        defective_products_collection.insert_one(data_to_save)
-        bot.reply_to(message, "Інформація про браковану продукцію успішно надіслана")
-        bot.send_message(message.chat.id, "Головне меню", reply_markup=main_menu_markup)
-    else:
-        bot.reply_to(message, "Операція скасована")
-        bot.send_message(message.chat.id, "Головне меню", reply_markup=main_menu_markup)
+    selected_subwarehouse = message.text  # Store the selected subwarehouse
+    counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
+
+    # Зберігаємо дані до MongoDB
+    data_to_save = {
+        'defective_products': defective_products,
+        'date': datetime.now().strftime('%Y-%m-%d'),
+        'counterpartie_name': counterpartie['name'],
+        'counterpartie_code': counterpartie['code'],
+        'subwarehouse': selected_subwarehouse  # Add subwarehouse here
+    }
+    defective_products_collection.insert_one(data_to_save)
+    bot.reply_to(message, "Інформація про браковану продукцію успішно надіслана")
+    bot.send_message(message.chat.id, "Головне меню", reply_markup=main_menu_markup)
 
 
 # Змінні для зберігання всіх піддонів
@@ -625,35 +676,34 @@ def handle_pallet_collection(message):
     global counterpartie_name
     counterpartie_name = counterpartie['name']
 
-    bot.send_message(message.chat.id, f"Контрагент: {counterpartie_name}")
     bot.send_message(message.chat.id, "Яка кількість піддонів?")
-    bot.register_next_step_handler(message, pallet_amount)
+    bot.register_next_step_handler(message, collect_pallet_amount)
 
 
 # Callback function to collect the pallet amount
-def pallet_amount(message):
+def collect_pallet_amount(message):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
-        global pallet_amount
-        pallet_amount = message.text
+        global pallet_amount_value  # Renamed to avoid conflict
+        pallet_amount_value = message.text
         bot.reply_to(message, "Яка загальна вартість піддонів?")
-        bot.register_next_step_handler(message, pallet_total_price)
+        bot.register_next_step_handler(message, collect_pallet_total_price)
 
 
 # Callback function to collect the pallet total price
-def pallet_total_price(message):
+def collect_pallet_total_price(message):
     if message.text == '/cancel':
         cancel_handel(message)
     else:
-        global pallet_total_price
-        pallet_total_price = message.text
+        global pallet_total_price_value  # Renamed to avoid conflict
+        pallet_total_price_value = message.text
 
         # Додаємо інформацію про піддони у список
         pallets.append({
             'counterpartie_name': counterpartie_name,
-            'pallet_amount': pallet_amount,
-            'pallet_total_price': pallet_total_price
+            'pallet_amount': pallet_amount_value,
+            'pallet_total_price': pallet_total_price_value
         })
 
         markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
@@ -665,7 +715,7 @@ def pallet_total_price(message):
 def add_or_finish_pallets(message):
     if message.text.lower() == 'додати':
         bot.reply_to(message, "Яка кількість піддонів?")
-        bot.register_next_step_handler(message, pallet_amount)
+        bot.register_next_step_handler(message, collect_pallet_amount)
     else:
         # Підтвердження всіх піддонів
         bot.reply_to(message, "Ось інформація про всі піддони:")
@@ -675,21 +725,42 @@ def add_or_finish_pallets(message):
                                               f"Кількість: {float(pallet['pallet_amount'])}\n"
                                               f"Загальна вартість: {float(pallet['pallet_total_price'])}\n")
 
+        # Ask for subwarehouse selection
+        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+        markup.add(types.KeyboardButton('Етрус'), types.KeyboardButton('Фастпол'))
+        bot.reply_to(message, "Оберіть субсклад (Етрус або Фастпол):", reply_markup=markup)
+        bot.register_next_step_handler(message, select_subwarehouse)
+
+
+# This function handles subwarehouse selection
+def select_subwarehouse(message):
+    if message.text.lower() not in ['етрус', 'фастпол']:
+        bot.reply_to(message, "Неправильний вибір. Оберіть субсклад: Етрус або Фастпол.")
+        bot.register_next_step_handler(message, select_subwarehouse)
+    else:
+        global selected_subwarehouse_value  # Renamed to avoid conflict
+        selected_subwarehouse_value = message.text  # Store the selected subwarehouse
+
+        # Proceed to confirmation
         markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
         markup.add(types.KeyboardButton('Погодити'), types.KeyboardButton('Відмовити'))
-        bot.reply_to(message, "Якщо все гаразд, натисніть 'Підтвердити', щоб надіслати інформацію", reply_markup=markup)
+        bot.reply_to(message, "Якщо все гаразд, натисніть 'Погодити', щоб надіслати інформацію", reply_markup=markup)
+        bot.register_next_step_handler(message, confirmation_pallets)
 
 
+# This function handles the final confirmation
 @bot.message_handler(func=lambda message: message.text.lower() in ['погодити', 'відмовити'])
 def confirmation_pallets(message):
     if message.text.lower() == 'погодити':
         counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
+
         # Зберігаємо дані до MongoDB
         data_to_save = {
             'pallets': pallets,
             'date': datetime.now().strftime('%Y-%m-%d'),
             'counterpartie_name': counterpartie['name'],
-            'counterpartie_code': counterpartie['code']
+            'counterpartie_code': counterpartie['code'],
+            'subwarehouse': selected_subwarehouse_value  # Use renamed variable
         }
         pallets_collection.insert_one(data_to_save)
         bot.reply_to(message, "Інформація про піддони успішно надіслана")
