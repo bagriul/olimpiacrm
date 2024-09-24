@@ -260,7 +260,7 @@ def calculate_product_rating(start_date, end_date, subwarehouse):
     return sorted_products
 
 
-def get_total_rest_by_warehouse():
+def get_total_rest_by_warehouse(subwarehouse):
     pipeline = [
         {"$match": {"rest": {"$exists": True}}},
         {"$addFields": {
