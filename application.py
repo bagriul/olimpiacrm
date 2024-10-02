@@ -1637,104 +1637,68 @@ def analytics():
     return jsonify(response_data), 200
 
 
+from collections import defaultdict
+from datetime import datetime
+
+
 @application.route('/production', methods=['POST'])
 def production():
     data = request.get_json()
     access_token = data.get('access_token')
-    type = data.get('type')
     page = data.get('page', 1)
     per_page = data.get('per_page', 10)
 
     if not check_token(access_token):
         return jsonify({'token': False}), 401
 
-    if type == 'manufactured_products':
-        filter_criteria = {}
-        total_products = manufactured_products_collection.count_documents(filter_criteria)
-        total_pages = math.ceil(total_products / per_page)
-        skip = (page - 1) * per_page
-        documents = list(manufactured_products_collection.find().skip(skip).limit(per_page))
-
-        for document in documents:
-            document['_id'] = str(document['_id'])
-
-        start_range = skip + 1
-        end_range = min(skip + per_page, total_products)
-
-        response = Response(
-            json_util.dumps({
-                'products': documents,
-                'total_products': total_products,
-                'start_range': start_range,
-                'end_range': end_range,
-                'total_pages': total_pages
-            }, ensure_ascii=False).encode('utf-8'),
-            content_type='application/json;charset=utf-8'
-        )
-
-        return response
-    elif type == 'used_raw':
-        filter_criteria = {}
-        total_products = used_raw_collection.count_documents(filter_criteria)
-        total_pages = math.ceil(total_products / per_page)
-        skip = (page - 1) * per_page
-        documents = list(used_raw_collection.find().skip(skip).limit(per_page))
-
-        for document in documents:
-            document['_id'] = str(document['_id'])
-
-        start_range = skip + 1
-        end_range = min(skip + per_page, total_products)
-
-        response = Response(
-            json_util.dumps({
-                'products': documents,
-                'total_products': total_products,
-                'start_range': start_range,
-                'end_range': end_range,
-                'total_pages': total_pages
-            }, ensure_ascii=False).encode('utf-8'),
-            content_type='application/json;charset=utf-8'
-        )
-
-        return response
-
-
-@application.route('/used_raw', methods=['POST'])
-def used_raw():
-    data = request.get_json()
-    access_token = data.get('access_token')
-    if check_token(access_token) is False:
-        return jsonify({'token': False}), 401
-    keyword = data.get('keyword')
-    page = data.get('page', 1)
-    per_page = data.get('per_page', 10)
-
+    # Retrieve both manufactured products and used raw materials
     filter_criteria = {}
-    if keyword:
-        used_raw_collection.create_index([("$**", "text")])
-        filter_criteria['$text'] = {'$search': keyword}
+    manufactured_products = list(manufactured_products_collection.find(filter_criteria).sort('date', -1))
+    used_raw_products = list(used_raw_collection.find(filter_criteria).sort('date', -1))
 
-    total_used_raw = used_raw_collection.count_documents(filter_criteria)
+    # Merge the two datasets
+    combined_products = manufactured_products + used_raw_products
 
-    total_pages = math.ceil(total_used_raw / per_page)
+    # Sort the combined list by date (assuming both have a 'date' field)
+    combined_products.sort(key=lambda x: x.get('date', ''), reverse=True)
 
-    # Paginate the query results using skip and limit, and apply filters
-    skip = (page - 1) * per_page
-    documents = list(used_raw_collection.find(filter_criteria).skip(skip).limit(per_page))
-    for document in documents:
+    # Group by date (day) using a defaultdict
+    grouped_by_day = defaultdict(list)
+    for document in combined_products:
+        # Convert MongoDB ObjectId to string
         document['_id'] = str(document['_id'])
 
-    # Calculate the range being displayed
-    start_range = skip + 1
-    end_range = min(skip + per_page, total_used_raw)
+        # Assuming the date field is in a datetime format, we group by the day part
+        date_str = document['date'].strftime('%Y-%m-%d')  # Format as 'YYYY-MM-DD'
+        grouped_by_day[date_str].append(document)
 
-    # Serialize the documents using json_util from pymongo and specify encoding
-    response = Response(json_util.dumps(
-        {'used_raw': documents, 'total_used_raw': total_used_raw, 'start_range': start_range, 'end_range': end_range,
-         'total_pages': total_pages},
-        ensure_ascii=False).encode('utf-8'),
-                        content_type='application/json;charset=utf-8')
+    # Convert defaultdict back to a regular dictionary and sort by day (descending order)
+    grouped_by_day = dict(sorted(grouped_by_day.items(), key=lambda x: x[0], reverse=True))
+
+    # Implement pagination on the grouped results
+    total_days = len(grouped_by_day)
+    total_pages = math.ceil(total_days / per_page)
+
+    # Extract only the required page of days
+    skip = (page - 1) * per_page
+    paginated_days = list(grouped_by_day.items())[skip:skip + per_page]
+
+    # Calculate the range of days being displayed
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_days)
+
+    # Prepare the response
+    response = Response(
+        json_util.dumps({
+            'products_by_day': paginated_days,  # Grouped data
+            'total_days': total_days,
+            'start_range': start_range,
+            'end_range': end_range,
+            'total_pages': total_pages
+        }, ensure_ascii=False).encode('utf-8'),
+        content_type='application/json;charset=utf-8'
+    )
+
     return response
 
 

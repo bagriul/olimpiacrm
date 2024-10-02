@@ -556,12 +556,12 @@ def ask_defect(message, used_amount, raw_code, warehouse_name_short):
             if type == '1' and code == raw_code:
                 raw_name = good
 
-        used_raw_collection.insert_one({'code': raw_code,
-                                        'subwarehouse': warehouse_name,
-                                        'name': raw_name,
-                                        'used': used_amount,
+        used_raw_collection.insert_one({'date': datetime.now(),
+                                        'code': raw_code,
+                                        'good': raw_name,
+                                        'amount': used_amount,
                                         'defect': defect_amount,
-                                        'date': datetime.now()})
+                                        'subwarehouse': warehouse_name})
         bot.send_message(message.from_user.id, 'Дані успішно надіслано')
 
 
