@@ -740,10 +740,11 @@ def merchants_reports_update():
 
     # Update fields based on the provided data
     report['shop_name'] = data.get('shop_name', report['shop_name'])
-    report['product_name'] = data.get('product_name', report['product_name'])
-    report['product_amount'] = data.get('product_amount', report['product_amount'])
-    report['sale_amount'] = data.get('sale_amount', report['sale_amount'])
-    report['photo'] = data.get('photo', report['photo'])
+    report['subwarehouse'] = data.get('subwarehouse', report['subwarehouse'])
+    report['products'] = data.get('products', report['products'])
+    report['counterpartie_name'] = data.get('counterpartie_name', report['counterpartie_name'])
+    report['counterpartie_code'] = data.get('counterpartie_code', report['counterpartie_code'])
+    report['counterpartie_warehouse'] = data.get('counterpartie_warehouse', report['counterpartie_warehouse'])
 
     # Update the report in the database
     merchants_reports_collection.update_one({'_id': ObjectId(report_id)}, {'$set': report})
