@@ -32,15 +32,15 @@ from analytics_functions import (
 
 application = Flask(__name__)
 
-# Flask-Mail configuration for Gmail
-application.config['MAIL_SERVER'] = 'smtp.gmail.com'
-application.config['MAIL_PORT'] = 587
-application.config['MAIL_USERNAME'] = 'your_email@gmail.com'  # Replace with your Gmail address
-application.config['MAIL_PASSWORD'] = 'your_email_password'    # Replace with your Gmail password
-application.config['MAIL_USE_TLS'] = True
-application.config['MAIL_USE_SSL'] = False
-application.config['MAIL_DEFAULT_SENDER'] = 'your_email@gmail.com'  # Replace with your Gmail address
+application.config['MAIL_SERVER'] = 'smtp.protonmail.com'
+application.config['MAIL_PORT'] = 465
+application.config['MAIL_USERNAME'] = 'fastpolcrm@protonmail.com'  # Replace with your ProtonMail address
+application.config['MAIL_PASSWORD'] = 'fastpolcrm'        # Replace with your ProtonMail password
+application.config['MAIL_USE_TLS'] = False
+application.config['MAIL_USE_SSL'] = True  # ProtonMail requires SSL
+application.config['MAIL_DEFAULT_SENDER'] = 'fastpolcrm@protonmail.com'  # Replace with your ProtonMail address
 mail = Mail(application)
+
 
 CORS(application)
 application.config['SECRET_KEY'] = config.SECRET_KEY
