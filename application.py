@@ -32,13 +32,12 @@ from analytics_functions import (
 
 application = Flask(__name__)
 
-application.config['MAIL_SERVER'] = 'smtp.protonmail.com'
-application.config['MAIL_PORT'] = 465
-application.config['MAIL_USERNAME'] = 'fastpolcrm@protonmail.com'  # Replace with your ProtonMail address
-application.config['MAIL_PASSWORD'] = 'fastpolcrm'        # Replace with your ProtonMail password
-application.config['MAIL_USE_TLS'] = False
-application.config['MAIL_USE_SSL'] = True  # ProtonMail requires SSL
-application.config['MAIL_DEFAULT_SENDER'] = 'fastpolcrm@protonmail.com'  # Replace with your ProtonMail address
+application.config['MAIL_SERVER'] = 'smtp.gmail.com'
+application.config['MAIL_PORT'] = 587
+application.config['MAIL_USE_TLS'] = True
+application.config['MAIL_USERNAME'] = 'fastpolcrm@gmail.com'
+application.config['MAIL_PASSWORD'] = config.email_password
+application.config['MAIL_DEFAULT_SENDER'] = 'fastpolcrm@gmail.com'
 mail = Mail(application)
 
 
@@ -247,7 +246,8 @@ def add_task():
     tasks_collection.insert_one(document)
 
     # Find the user's email
-    user = users_collection.find_one({'name': responsible})
+    user_email = re.findall(r'\((.*?)\)', responsible)[0]
+    user = users_collection.find_one({'email': user_email})
     if user:
         user_email = user.get('email')
         if user_email:
