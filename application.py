@@ -1080,7 +1080,7 @@ def order_info():
         order_number_list = []
         order_number_list.append(order_document['order_number_1c'])
         request_payment = requests.post('https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getpaymentstatus',
-                                        data={"order": order_number_list}, auth=('CRM', 'CegJr6YcK1sTnljgTIly'))
+                                        data={"order": order_number_list}, auth=('CRM', 'CegJr6YcK1sTnljgTIly'), verify=False)
         root = ET.fromstring(request_payment.text)
         payment_answer = root.text
         payment_status = payment_answer
@@ -1153,7 +1153,7 @@ def products():
 
     for url in urls:
         # Retrieve data from external API
-        response = requests.get(url, auth=(username, password))
+        response = requests.get(url, auth=(username, password), verify=False)
         xml_string = response.text
 
         # Parse XML response
