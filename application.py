@@ -1095,12 +1095,54 @@ def order_info():
         return response
 
 
+def insert_order_data_from_url():
+    url1 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getorders&datefrom=20240301&dateto=20250119'  # Replace with the actual first URL
+    url2 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getorders&datefrom=20240301&dateto=20250119'  # Replace with the actual second URL
+
+    response1 = requests.get(url1)
+    response2 = requests.get(url2)
+
+    # Parse XML responses
+    orders_list1 = ET.fromstring(response1.text)
+    orders_list2 = ET.fromstring(response2.text)
+
+    # Function to convert XML data into MongoDB insertable format
+    def parse_order_xml(order):
+        parsed_order = {
+            'number': order.find('Number').text,
+            'date': order.find('Date').text,
+            'buyer': order.find('Buyer').text,
+            'total': order.find('Total').text,
+            'comment': order.find('Comment').text,
+            'goods': []
+        }
+        for goods_item in order.findall('Goods/Code'):
+            goods = {
+                'code': goods_item.text,
+                'amount': goods_item.find('Amount').text,
+                'price': goods_item.find('Price').text,
+                'summ': goods_item.find('Summ').text
+            }
+            parsed_order['goods'].append(goods)
+        return parsed_order
+
+    # Insert data from both orders lists
+    for orders_list in [orders_list1, orders_list2]:
+        for order in orders_list.findall('Order'):
+            order_data = parse_order_xml(order)
+            orders_collection.insert_one(order_data)
+
+
 @application.route('/orders', methods=['POST'])
 def orders():
+    # Insert data from the URLs into MongoDB
+    insert_order_data_from_url()
+
     data = request.get_json()
     access_token = data.get('access_token')
     if check_token(access_token) is False:
         return jsonify({'token': False}), 401
+
     keyword = data.get('keyword')
     page = data.get('page', 1)
     per_page = data.get('per_page', 10)
@@ -1111,7 +1153,6 @@ def orders():
         filter_criteria['$text'] = {'$search': keyword}
 
     total_orders = orders_collection.count_documents(filter_criteria)
-
     total_pages = math.ceil(total_orders / per_page)
 
     # Paginate the query results using skip and limit, and apply filters
