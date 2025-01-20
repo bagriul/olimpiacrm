@@ -1105,7 +1105,9 @@ def insert_order_data_from_url():
     for orders_list in [orders_list1, orders_list2]:
         for order in orders_list.findall('Order'):
             order_data = parse_order_xml(order)
-            orders_collection.insert_one(order_data)
+            is_present = orders_collection.find_one(order_data)
+            if is_present is None:
+                orders_collection.insert_one(order_data)
             inserted += 1
 
     if inserted == 0:
