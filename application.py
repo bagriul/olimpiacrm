@@ -1096,11 +1096,14 @@ def order_info():
 
 
 def insert_order_data_from_url():
-    url1 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getorders&datefrom=20240301&dateto=20250119'  # Replace with the actual first URL
-    url2 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getorders&datefrom=20240301&dateto=20250119'  # Replace with the actual second URL
+    url1 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getorders'  # Replace with the actual first URL
+    url2 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getorders'  # Replace with the actual second URL
 
-    response1 = requests.get(url1)
-    response2 = requests.get(url2)
+    username = 'CRM'
+    password = 'CegJr6YcK1sTnljgTIly'
+
+    response1 = requests.get(url1, auth=(username, password), verify=False)
+    response2 = requests.get(url2, auth=(username, password), verify=False)
 
     # Parse XML responses
     orders_list1 = ET.fromstring(response1.text)
