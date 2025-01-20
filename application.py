@@ -1119,9 +1119,9 @@ def insert_order_data_from_url():
             'comment': order.find('Comment').text,
             'goods': []
         }
-        for goods_item in order.findall('Goods/Code'):
+        for goods_item in order.findall('Goods'):
             goods = {
-                'code': goods_item.text,
+                'code': goods_item.find('Code').text,
                 'amount': goods_item.find('Amount').text,
                 'price': goods_item.find('Price').text,
                 'summ': goods_item.find('Summ').text
@@ -1130,10 +1130,15 @@ def insert_order_data_from_url():
         return parsed_order
 
     # Insert data from both orders lists
+    inserted = 0  # Counter to track inserted orders
     for orders_list in [orders_list1, orders_list2]:
         for order in orders_list.findall('Order'):
             order_data = parse_order_xml(order)
             orders_collection.insert_one(order_data)
+            inserted += 1
+
+    if inserted == 0:
+        print("No orders were found in the XML responses.")
 
 
 @application.route('/orders', methods=['POST'])
