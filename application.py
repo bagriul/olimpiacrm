@@ -1012,42 +1012,22 @@ def update_order():
         return jsonify({'message': False}), 404
 
     # Update fields based on the provided data
-    order['sales_agent'] = data.get('sales_agent', order.get('sales_agent'))
-    order['distributor'] = data.get('distributor', order.get('distributor'))
-    order['shop'] = data.get('shop', order.get('shop'))
-    order['product'] = data.get('product', order.get('product'))
-    order['comment'] = data.get('comment', order.get('comment'))
-    order['order_number'] = data.get('order_number', order.get('order_number'))
+    order['number'] = data.get('number', order.get('number'))
     order['date'] = data.get('date', order.get('date'))
-    order['counterpartie_code'] = data.get('counterpartie_code', order.get('counterpartie_code'))
-    order['order_number_1c'] = data.get('order_number_1c', order.get('order_number_1c'))
-
-    status = data.get('status')
-    if status:
-        status_doc = statuses_collection.find_one({'status': status})
-        if status_doc:
-            del status_doc['_id']
-        order['status'] = status_doc
-
-    order['photos'] = data.get('photos', order.get('photos'))
+    order['buyer'] = data.get('buyer', order.get('buyer'))
+    order['total'] = data.get('total', order.get('total'))
+    order['comment'] = data.get('comment', order.get('comment'))
+    order['goods'] = data.get('goods', order.get('goods'))
 
     # Update the order in the database
     orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
 
-    # Recalculate totals
-    order = orders_collection.find_one({'_id': ObjectId(order_id)})
-    total_amount = 0
-    total_amount_discount = 0
-    for product in order['product']:
-        if product.get('discount', '0') == '0':
-            total_amount += int(product.get('amount', 0))
-        else:
-            total_amount_discount += int(product.get('amount', 0))
-    order['total_amount'] = total_amount
-    order['total_amount_discount'] = total_amount_discount
+    # Recalculate total if needed
+    total = sum(float(item['summ'].replace(',', '.')) for item in order['goods'])
+    order['total'] = str(total).replace('.', ',')
 
-    # Update totals in the database
-    orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': order})
+    # Update total in the database
+    orders_collection.update_one({'_id': ObjectId(order_id)}, {'$set': {'total': order['total']}})
 
     return jsonify({'message': True}), 200
 
@@ -1077,16 +1057,7 @@ def order_info():
     order_document = orders_collection.find_one({'_id': object_id})
 
     if order_document:
-        order_number_list = []
-        order_number_list.append(order_document['order_number_1c'])
-        request_payment = requests.post('https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getpaymentstatus',
-                                        data={"order": order_number_list}, auth=('CRM', 'CegJr6YcK1sTnljgTIly'), verify=False)
-        root = ET.fromstring(request_payment.text)
-        payment_answer = root.text
-        payment_status = payment_answer
-
         order_document['_id'] = str(order_document['_id'])
-        order_document['payment_status'] = payment_status
 
         # Use dumps() to handle ObjectId serialization
         return json.dumps(order_document, default=str), 200, {'Content-Type': 'application/json'}
