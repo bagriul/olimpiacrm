@@ -1067,8 +1067,8 @@ def order_info():
 
 
 def insert_order_data_from_url():
-    url1 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getorders'  # Replace with the actual first URL
-    url2 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getorders'  # Replace with the actual second URL
+    url1 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getorders&datefrom=20000101'  # Replace with the actual first URL
+    url2 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getorders&datefrom=20000101'  # Replace with the actual second URL
 
     username = 'CRM'
     password = 'CegJr6YcK1sTnljgTIly'
