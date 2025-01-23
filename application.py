@@ -1162,16 +1162,16 @@ def products():
     if not check_token(access_token):
         return jsonify({'token': False}), 401
 
+    products_collection.delete_many({'type': '1c'})
+
     username = 'CRM'
     password = 'CegJr6YcK1sTnljgTIly'
     urls = ['https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest',
             'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest']
 
-    # Fetch existing products once and store in a dictionary
     existing_products = products_collection.find({}, {'code': 1, 'recommended_rest': 1})
-    existing_products_dict = {prod['code']: prod.get('recommended_rest', '') for prod in existing_products if 'code' in prod}
-
-    bulk_operations = []
+    existing_products_dict = {prod['code']: prod.get('recommended_rest', '') for prod in existing_products if
+                              'code' in prod}
 
     for url in urls:
         # Retrieve data from external API
@@ -1181,7 +1181,6 @@ def products():
         # Parse XML response
         root = ET.fromstring(xml_string)
 
-        # Prepare bulk operations
         for product in root.findall('Product'):
             code = product.get('Code')
             good = product.get('Good')
@@ -1203,6 +1202,7 @@ def products():
                 sort = 'Печиво'
             else:
                 subwarehouse = 'Етрус'
+                sort = None
 
             # Retrieve the current 'recommended_rest' from the dictionary
             recommended_rest = existing_products_dict.get(code, '')
@@ -1219,63 +1219,53 @@ def products():
                 'type': '1c'
             }
 
-            bulk_operations.append(pymongo.UpdateOne(
-                {'code': code},
-                {'$set': document},
-                upsert=True
-            ))
+            products_collection.insert_one(document)
 
-    # Execute bulk operations in batches to optimize performance
-    if bulk_operations:
-        batch_size = 1000
-        for i in range(0, len(bulk_operations), batch_size):
-            products_collection.bulk_write(bulk_operations[i:i + batch_size])
+        # Pagination and filtering
+        keyword = data.get('keyword')
+        page = data.get('page', 1)
+        per_page = data.get('per_page', 10)
+        warehouse = data.get('warehouse')
+        subwarehouse = data.get('subwarehouse')
+        sort = data.get('sort')
 
-    # Pagination and filtering
-    keyword = data.get('keyword')
-    page = data.get('page', 1)
-    per_page = data.get('per_page', 10)
-    warehouse = data.get('warehouse')
-    subwarehouse = data.get('subwarehouse')
-    sort = data.get('sort')
+        filter_criteria = {}
+        if keyword:
+            regex_pattern = f'.*{re.escape(keyword)}.*'
+            filter_criteria['good'] = {'$regex': regex_pattern, '$options': 'i'}
+        if warehouse:
+            regex_pattern = f'.*{re.escape(warehouse)}.*'
+            filter_criteria['warehouse'] = {'$regex': regex_pattern, '$options': 'i'}
+        if subwarehouse:
+            regex_pattern = f'.*{re.escape(subwarehouse)}.*'
+            filter_criteria['subwarehouse'] = {'$regex': regex_pattern, '$options': 'i'}
+        if sort:
+            regex_pattern = f'.*{re.escape(sort)}.*'
+            filter_criteria['sort'] = {'$regex': regex_pattern, '$options': 'i'}
 
-    filter_criteria = {}
-    if keyword:
-        regex_pattern = f'.*{re.escape(keyword)}.*'
-        filter_criteria['good'] = {'$regex': regex_pattern, '$options': 'i'}
-    if warehouse:
-        regex_pattern = f'.*{re.escape(warehouse)}.*'
-        filter_criteria['warehouse'] = {'$regex': regex_pattern, '$options': 'i'}
-    if subwarehouse:
-        regex_pattern = f'.*{re.escape(subwarehouse)}.*'
-        filter_criteria['subwarehouse'] = {'$regex': regex_pattern, '$options': 'i'}
-    if sort:
-        regex_pattern = f'.*{re.escape(sort)}.*'
-        filter_criteria['sort'] = {'$regex': regex_pattern, '$options': 'i'}
+        total_products = products_collection.count_documents(filter_criteria)
+        total_pages = math.ceil(total_products / per_page)
+        skip = (page - 1) * per_page
+        documents = list(products_collection.find(filter_criteria).skip(skip).limit(per_page))
 
-    total_products = products_collection.count_documents(filter_criteria)
-    total_pages = math.ceil(total_products / per_page)
-    skip = (page - 1) * per_page
-    documents = list(products_collection.find(filter_criteria).skip(skip).limit(per_page))
+        for document in documents:
+            document['_id'] = str(document['_id'])
 
-    for document in documents:
-        document['_id'] = str(document['_id'])
+        start_range = skip + 1
+        end_range = min(skip + per_page, total_products)
 
-    start_range = skip + 1
-    end_range = min(skip + per_page, total_products)
+        response = Response(
+            json_util.dumps({
+                'products': documents,
+                'total_products': total_products,
+                'start_range': start_range,
+                'end_range': end_range,
+                'total_pages': total_pages
+            }, ensure_ascii=False).encode('utf-8'),
+            content_type='application/json;charset=utf-8'
+        )
 
-    response = Response(
-        json_util.dumps({
-            'products': documents,
-            'total_products': total_products,
-            'start_range': start_range,
-            'end_range': end_range,
-            'total_pages': total_pages
-        }, ensure_ascii=False).encode('utf-8'),
-        content_type='application/json;charset=utf-8'
-    )
-
-    return response
+        return response
 
 
 @application.route('/add_product', methods=['POST'])
