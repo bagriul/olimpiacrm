@@ -1162,20 +1162,23 @@ def products():
     if not check_token(access_token):
         return jsonify({'token': False}), 401
 
-    products_collection.delete_many({'type': '1c'})
-
     username = 'CRM'
     password = 'CegJr6YcK1sTnljgTIly'
     urls = ['https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest',
             'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest']
 
-    existing_products = products_collection.find({}, {'code': 1, 'recommended_rest': 1})
-    existing_products_dict = {prod['code']: prod.get('recommended_rest', '') for prod in existing_products if
-                              'code' in prod}
+    # Fetch existing products with their recommended_rest
+    existing_products = list(products_collection.find({}, {'code': 1, 'good': 1, 'recommended_rest': 1}))
+    existing_products_dict = {}
+    for item in existing_products:
+        key = (item['code'], item['good'])
+        if key not in existing_products_dict or item.get('recommended_rest'):
+            existing_products_dict[key] = item
+
+    products_collection.delete_many({'type': '1c'})
 
     documents = []  # Collect all documents for batch insertion
     for url in urls:
-        print(url)
         response = requests.get(url, auth=(username, password), verify=False)
         xml_string = response.text
         root = ET.fromstring(xml_string)
@@ -1200,7 +1203,7 @@ def products():
                 subwarehouse = 'Етрус'
                 sort = None
 
-            recommended_rest = existing_products_dict.get(code, '')
+            recommended_rest = existing_products_dict.get((code, good), {}).get('recommended_rest', '')
 
             document = {
                 'code': code,
