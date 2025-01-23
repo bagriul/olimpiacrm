@@ -1173,12 +1173,11 @@ def products():
     existing_products_dict = {prod['code']: prod.get('recommended_rest', '') for prod in existing_products if
                               'code' in prod}
 
+    documents = []  # Collect all documents for batch insertion
     for url in urls:
-        # Retrieve data from external API
+        print(url)
         response = requests.get(url, auth=(username, password), verify=False)
         xml_string = response.text
-
-        # Parse XML response
         root = ET.fromstring(xml_string)
 
         for product in root.findall('Product'):
@@ -1189,10 +1188,7 @@ def products():
             type = product.get('Type')
             sort = product.get('Sort')
 
-            if type == "1":
-                warehouse = 'Склад Сировини'
-            elif type == '2':
-                warehouse = 'Склад Готової продукції'
+            warehouse = 'Склад Сировини' if type == "1" else 'Склад Готової продукції'
 
             if url == 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getreportrest' and sort == '1':
                 subwarehouse = 'Фастпол'
@@ -1204,7 +1200,6 @@ def products():
                 subwarehouse = 'Етрус'
                 sort = None
 
-            # Retrieve the current 'recommended_rest' from the dictionary
             recommended_rest = existing_products_dict.get(code, '')
 
             document = {
@@ -1218,54 +1213,57 @@ def products():
                 'recommended_rest': recommended_rest,
                 'type': '1c'
             }
+            documents.append(document)
 
-            products_collection.insert_one(document)
+    # Perform bulk insertion
+    if documents:
+        products_collection.insert_many(documents)
 
-        # Pagination and filtering
-        keyword = data.get('keyword')
-        page = data.get('page', 1)
-        per_page = data.get('per_page', 10)
-        warehouse = data.get('warehouse')
-        subwarehouse = data.get('subwarehouse')
-        sort = data.get('sort')
+    # Pagination and filtering
+    keyword = data.get('keyword')
+    page = data.get('page', 1)
+    per_page = data.get('per_page', 10)
+    warehouse = data.get('warehouse')
+    subwarehouse = data.get('subwarehouse')
+    sort = data.get('sort')
 
-        filter_criteria = {}
-        if keyword:
-            regex_pattern = f'.*{re.escape(keyword)}.*'
-            filter_criteria['good'] = {'$regex': regex_pattern, '$options': 'i'}
-        if warehouse:
-            regex_pattern = f'.*{re.escape(warehouse)}.*'
-            filter_criteria['warehouse'] = {'$regex': regex_pattern, '$options': 'i'}
-        if subwarehouse:
-            regex_pattern = f'.*{re.escape(subwarehouse)}.*'
-            filter_criteria['subwarehouse'] = {'$regex': regex_pattern, '$options': 'i'}
-        if sort:
-            regex_pattern = f'.*{re.escape(sort)}.*'
-            filter_criteria['sort'] = {'$regex': regex_pattern, '$options': 'i'}
+    filter_criteria = {}
+    if keyword:
+        regex_pattern = f'.*{re.escape(keyword)}.*'
+        filter_criteria['good'] = {'$regex': regex_pattern, '$options': 'i'}
+    if warehouse:
+        regex_pattern = f'.*{re.escape(warehouse)}.*'
+        filter_criteria['warehouse'] = {'$regex': regex_pattern, '$options': 'i'}
+    if subwarehouse:
+        regex_pattern = f'.*{re.escape(subwarehouse)}.*'
+        filter_criteria['subwarehouse'] = {'$regex': regex_pattern, '$options': 'i'}
+    if sort:
+        regex_pattern = f'.*{re.escape(sort)}.*'
+        filter_criteria['sort'] = {'$regex': regex_pattern, '$options': 'i'}
 
-        total_products = products_collection.count_documents(filter_criteria)
-        total_pages = math.ceil(total_products / per_page)
-        skip = (page - 1) * per_page
-        documents = list(products_collection.find(filter_criteria).skip(skip).limit(per_page))
+    total_products = products_collection.count_documents(filter_criteria)
+    total_pages = math.ceil(total_products / per_page)
+    skip = (page - 1) * per_page
+    documents = list(products_collection.find(filter_criteria).skip(skip).limit(per_page))
 
-        for document in documents:
-            document['_id'] = str(document['_id'])
+    for document in documents:
+        document['_id'] = str(document['_id'])
 
-        start_range = skip + 1
-        end_range = min(skip + per_page, total_products)
+    start_range = skip + 1
+    end_range = min(skip + per_page, total_products)
 
-        response = Response(
-            json_util.dumps({
-                'products': documents,
-                'total_products': total_products,
-                'start_range': start_range,
-                'end_range': end_range,
-                'total_pages': total_pages
-            }, ensure_ascii=False).encode('utf-8'),
-            content_type='application/json;charset=utf-8'
-        )
+    response = Response(
+        json_util.dumps({
+            'products': documents,
+            'total_products': total_products,
+            'start_range': start_range,
+            'end_range': end_range,
+            'total_pages': total_pages
+        }, ensure_ascii=False).encode('utf-8'),
+        content_type='application/json;charset=utf-8'
+    )
 
-        return response
+    return response
 
 
 @application.route('/add_product', methods=['POST'])
