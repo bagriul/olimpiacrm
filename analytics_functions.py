@@ -488,13 +488,13 @@ def get_total_used_raw(start_date_str, end_date_str, subwarehouse):
                     "$gte": start_date,
                     "$lte": end_date
                 },
-                "subwarehouse": subwarehouse  # Додаємо фільтр за складом
+                "subwarehouse": subwarehouse  # Filter by subwarehouse
             }
         },
         {
             "$group": {
                 "_id": None,
-                "total_used": {"$sum": "$used"}
+                "total_used": {"$sum": "$amount"}  # Sum the 'amount' field
             }
         }
     ]
