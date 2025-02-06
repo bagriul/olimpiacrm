@@ -1073,11 +1073,11 @@ def insert_order_data_from_url():
     username = 'CRM'
     password = 'CegJr6YcK1sTnljgTIly'
 
-    # Make requests (note: verify=False disables certificate verification)
+    # Fetch responses
     response1 = requests.get(url1, auth=(username, password), verify=False)
     response2 = requests.get(url2, auth=(username, password), verify=False)
 
-    # Parse XML responses into ElementTree objects
+    # Parse XML responses
     orders_list1 = ET.fromstring(response1.text)
     orders_list2 = ET.fromstring(response2.text)
 
@@ -1115,12 +1115,20 @@ def insert_order_data_from_url():
 
     inserted = 0  # Counter to track inserted orders
 
-    # Loop over both XML responses
-    for orders_list in [orders_list1, orders_list2]:
+    # List of tuples: (parsed XML, subwarehouse value)
+    sources = [
+        (orders_list1, 'Етрус'),
+        (orders_list2, 'Фастпол')
+    ]
+
+    for orders_list, subwarehouse in sources:
         # Iterate over each <Order> element
         for order in orders_list.findall('Order'):
             order_data = parse_order_xml(order)
-            # Check for an existing order by order number
+            # Add subwarehouse field according to the source URL
+            order_data['subwarehouse'] = subwarehouse
+
+            # Check for an existing order by order number (you can adjust the criteria as needed)
             is_present = orders_collection.find_one({'number': order_data['number']})
             if is_present is None:
                 orders_collection.insert_one(order_data)
