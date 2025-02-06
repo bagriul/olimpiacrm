@@ -1067,51 +1067,69 @@ def order_info():
 
 
 def insert_order_data_from_url():
-    url1 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getorders&datefrom=20000101'  # Replace with the actual first URL
-    url2 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getorders&datefrom=20000101'  # Replace with the actual second URL
+    url1 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getorders&datefrom=20000101'
+    url2 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getorders&datefrom=20000101'
 
     username = 'CRM'
     password = 'CegJr6YcK1sTnljgTIly'
 
+    # Make requests (note: verify=False disables certificate verification)
     response1 = requests.get(url1, auth=(username, password), verify=False)
     response2 = requests.get(url2, auth=(username, password), verify=False)
 
-    # Parse XML responses
+    # Parse XML responses into ElementTree objects
     orders_list1 = ET.fromstring(response1.text)
     orders_list2 = ET.fromstring(response2.text)
 
-    # Function to convert XML data into MongoDB insertable format
     def parse_order_xml(order):
+        """
+        Convert an Order element into a dictionary.
+        The <Goods> element contains a series of child elements in groups of four:
+        Code, Amount, Price, Summ.
+        """
         parsed_order = {
             'number': order.find('Number').text,
             'date': order.find('Date').text,
             'buyer': order.find('Buyer').text,
             'total': order.find('Total').text,
-            'comment': order.find('Comment').text,
+            'comment': order.find('Comment').text if order.find('Comment') is not None else '',
             'goods': []
         }
-        for goods_item in order.findall('Goods'):
-            goods = {
-                'code': goods_item.find('Code').text,
-                'amount': goods_item.find('Amount').text,
-                'price': goods_item.find('Price').text,
-                'summ': goods_item.find('Summ').text
-            }
-            parsed_order['goods'].append(goods)
+
+        goods_elem = order.find('Goods')
+        if goods_elem is not None:
+            # Get all children elements (the order of elements is assumed to be Code, Amount, Price, Summ repeatedly)
+            children = list(goods_elem)
+            # Group every 4 elements together
+            for i in range(0, len(children), 4):
+                # Ensure there are enough elements for a complete goods item
+                if i + 3 < len(children):
+                    goods_item = {
+                        'code': children[i].text,
+                        'amount': children[i+1].text,
+                        'price': children[i+2].text,
+                        'summ': children[i+3].text
+                    }
+                    parsed_order['goods'].append(goods_item)
         return parsed_order
 
-    # Insert data from both orders lists
     inserted = 0  # Counter to track inserted orders
+
+    # Loop over both XML responses
     for orders_list in [orders_list1, orders_list2]:
+        # Iterate over each <Order> element
         for order in orders_list.findall('Order'):
             order_data = parse_order_xml(order)
-            is_present = orders_collection.find_one(order_data)
+            # Check for an existing order by order number
+            is_present = orders_collection.find_one({'number': order_data['number']})
             if is_present is None:
                 orders_collection.insert_one(order_data)
-            inserted += 1
+                inserted += 1
 
     if inserted == 0:
-        print("No orders were found in the XML responses.")
+        print("No new orders were inserted (or no orders were found in the XML responses).")
+    else:
+        print(f"{inserted} orders inserted.")
 
 
 @application.route('/orders', methods=['POST'])
