@@ -21,179 +21,378 @@ pallets_collection = db['pallets']
 
 
 def total_sales(start_date, end_date, subwarehouse):
+    """
+    Calculate total sales between start_date and end_date (inclusive) for a given subwarehouse.
+
+    Parameters:
+        start_date (str): Start date in 'yyyy-mm-dd' format.
+        end_date (str): End date in 'yyyy-mm-dd' format.
+        subwarehouse (str): Subwarehouse name.
+
+    Returns:
+        total_amount (float): Sum of the 'total' field for matching orders.
+    """
+    # Convert the input date strings to datetime objects
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
     pipeline = [
+        # Convert the order's date string ("dd.mm.yyyy HH:MM:SS") into a date object
         {
-            "$match": {
-                "date": {"$gte": start_date, "$lte": end_date},
-                "product.0.subwarehouse": subwarehouse  # Фільтруємо за першим продуктом
+            "$addFields": {
+                "order_date": {
+                    "$dateFromString": {
+                        "dateString": "$date",
+                        "format": "%d.%m.%Y %H:%M:%S"
+                    }
+                }
             }
         },
+        # Filter documents by the converted order_date and subwarehouse.
         {
-            "$unwind": "$product"  # Розкладаємо масив product
+            "$match": {
+                "order_date": {"$gte": start_date_obj, "$lte": end_date_obj},
+                "subwarehouse": subwarehouse
+            }
         },
+        # Convert the total string (with comma as decimal separator) into a numeric value.
+        {
+            "$addFields": {
+                "total_numeric": {
+                    "$toDouble": {
+                        "$replaceAll": {
+                            "input": "$total",
+                            "find": ",",
+                            "replacement": "."
+                        }
+                    }
+                }
+            }
+        },
+        # Group all matching documents and sum up total_numeric.
         {
             "$group": {
                 "_id": None,
-                "total_amount": {"$sum": "$product.amount"}  # Підсумовуємо кількість товарів
+                "total_amount": {"$sum": "$total_numeric"}
             }
         }
     ]
+
     result = list(orders_collection.aggregate(pipeline))
     total_amount = result[0]['total_amount'] if result else 0
     return total_amount
 
 
 def average_order_amount(start_date, end_date, subwarehouse):
+    """
+    Calculate the average order amount (total goods amount per order) between
+    start_date and end_date for a given subwarehouse.
+
+    Parameters:
+        start_date (str): Start date in 'yyyy-mm-dd' format.
+        end_date (str): End date in 'yyyy-mm-dd' format.
+        subwarehouse (str): Subwarehouse name.
+
+    Returns:
+        average_order_amount (float): The average total goods amount per order.
+    """
+    # Convert input date strings to datetime objects.
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
     pipeline = [
+        # Convert the document's "date" string to a date object ("order_date")
+        {
+            "$addFields": {
+                "order_date": {
+                    "$dateFromString": {
+                        "dateString": "$date",
+                        "format": "%d.%m.%Y %H:%M:%S"
+                    }
+                }
+            }
+        },
+        # Filter documents by order_date and subwarehouse.
         {
             "$match": {
-                "date": {"$gte": start_date, "$lte": end_date},
-                "product.0.subwarehouse": subwarehouse  # Фільтруємо за першим продуктом
+                "order_date": {"$gte": start_date_obj, "$lte": end_date_obj},
+                "subwarehouse": subwarehouse
             }
         },
+        # Unwind the goods array
         {
-            "$unwind": "$product"  # Розкладаємо масив product
+            "$unwind": "$goods"
         },
+        # Group by order number to calculate the total goods amount per order.
         {
             "$group": {
-                "_id": "$order_number",  # Групуємо за номером замовлення
-                "total_order_amount": {"$sum": "$product.amount"}  # Обчислюємо загальну кількість товарів у замовленні
+                "_id": "$number",  # Group by order number.
+                "total_order_amount": {
+                    "$sum": { "$toDouble": "$goods.amount" }  # Convert amount to number.
+                }
             }
         },
+        # Group all orders to calculate overall count and sum of goods amounts.
         {
             "$group": {
                 "_id": None,
-                "total_order_count": {"$sum": 1},  # Підраховуємо загальну кількість замовлень
-                "total_amount": {"$sum": "$total_order_amount"}  # Підраховуємо загальну кількість товарів для всіх замовлень
+                "total_order_count": {"$sum": 1},
+                "total_amount": {"$sum": "$total_order_amount"}
             }
         }
     ]
 
     result = list(orders_collection.aggregate(pipeline))
+    if result:
+        total_order_count = result[0].get('total_order_count', 0)
+        total_amount = result[0].get('total_amount', 0)
+    else:
+        total_order_count = 0
+        total_amount = 0
 
-    total_order_count = result[0]['total_order_count'] if result else 0
-    total_amount = result[0]['total_amount'] if result else 0
-
-    average_order_amount = total_amount / total_order_count if total_order_count > 0 else 0
-    return average_order_amount
+    average_order_amt = total_amount / total_order_count if total_order_count > 0 else 0
+    return average_order_amt
 
 
 def order_volume_dynamic(start_date, end_date, subwarehouse):
-    # Конвертація start_date і end_date в об'єкти datetime
-    start_date = datetime.strptime(start_date, '%Y-%m-%d')
-    end_date = datetime.strptime(end_date, '%Y-%m-%d')
+    """
+    Returns a dictionary mapping each day (as 'yyyy-mm-dd') to the total amount
+    of goods in orders for that day, filtered by the provided subwarehouse.
 
-    # Ініціалізуємо словник для зберігання кількості товарів по днях
-    daily_product_amount = {}
+    Parameters:
+        start_date (str): Start date in 'yyyy-mm-dd' format.
+        end_date (str): End date in 'yyyy-mm-dd' format.
+        subwarehouse (str): The subwarehouse to filter by.
 
-    # Ітеруємо по кожному дню в заданому періоді
-    current_date = start_date
-    while current_date <= end_date:
-        # Запит для пошуку замовлень на поточний день
-        query = {
-            'date': {
-                '$gte': current_date.strftime('%Y-%m-%d 00:00:00'),
-                '$lt': (current_date + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
-            },
-            'product.0.subwarehouse': subwarehouse  # Фільтруємо за першим продуктом у замовленні
+    Returns:
+        dict: Keys are date strings (yyyy-mm-dd) and values are the summed goods amounts.
+    """
+    # Convert the input date strings to datetime objects.
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+    # For an inclusive end_date, use an exclusive upper bound by adding one day.
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+
+    pipeline = [
+        # Convert the stored "date" string into a date object.
+        {
+            "$addFields": {
+                "order_date": {
+                    "$dateFromString": {
+                        "dateString": "$date",
+                        "format": "%d.%m.%Y %H:%M:%S"
+                    }
+                }
+            }
+        },
+        # Filter documents by the converted order_date and subwarehouse.
+        {
+            "$match": {
+                "order_date": {"$gte": start_date_obj, "$lt": end_date_obj},
+                "subwarehouse": subwarehouse
+            }
+        },
+        # Unwind the goods array so each item is processed individually.
+        {
+            "$unwind": "$goods"
+        },
+        # Convert the "amount" field of the goods item (stored as a string with a comma)
+        # to a numeric value. Since the field is nested in "goods", we can use dot-notation.
+        {
+            "$addFields": {
+                "goods.amount_numeric": {
+                    "$toDouble": {
+                        "$replaceAll": {
+                            "input": "$goods.amount",
+                            "find": ",",
+                            "replacement": "."
+                        }
+                    }
+                }
+            }
+        },
+        # Group by day (formatted as 'yyyy-mm-dd') and sum the numeric amounts.
+        {
+            "$group": {
+                "_id": {
+                    "day": {
+                        "$dateToString": {"format": "%Y-%m-%d", "date": "$order_date"}
+                    }
+                },
+                "daily_amount": {"$sum": "$goods.amount_numeric"}
+            }
+        },
+        # Sort the results by day.
+        {
+            "$sort": {"_id.day": 1}
         }
+    ]
 
-        # Агрегуємо загальну кількість продуктів на поточний день
-        total_amount = 0
-        for order in orders_collection.find(query):
-            for product in order['product']:
-                total_amount += product['amount']
-
-        # Зберігаємо загальну кількість для поточного дня в словник
-        daily_product_amount[current_date.strftime('%Y-%m-%d')] = total_amount
-
-        # Переходимо до наступного дня
-        current_date += timedelta(days=1)
-
+    result = list(orders_collection.aggregate(pipeline))
+    # Transform the aggregation result into a dictionary mapping day to the summed amount.
+    daily_product_amount = {doc['_id']['day']: doc['daily_amount'] for doc in result}
     return daily_product_amount
 
 
 def paid_orders_percentage(start_date, end_date, subwarehouse):
-    # Конвертація start_date і end_date в об'єкти datetime
-    start_date = datetime.strptime(start_date, '%Y-%m-%d')
-    end_date = datetime.strptime(end_date, '%Y-%m-%d')
+    """
+    Calculate the percentage of paid orders between start_date and end_date
+    for a given subwarehouse. The orders collection stores dates as strings
+    in the "dd.mm.yyyy HH:MM:SS" format, and the subwarehouse is stored at the top level.
 
-    # Ініціалізуємо змінні
-    total_orders = 0
-    paid_orders = 0
-    order_number_list = []  # Збираємо всі номери замовлень
+    Parameters:
+        start_date (str): Start date in "yyyy-mm-dd" format.
+        end_date (str): End date in "yyyy-mm-dd" format.
+        subwarehouse (str): Subwarehouse name.
 
-    # Знайти всі замовлення в межах діапазону дат та фільтрувати за першим продуктом складу
-    query = {
-        'date': {
-            '$gte': start_date,
-            '$lte': end_date
+    Returns:
+        float: The percentage of orders that have been paid.
+    """
+    # Convert input date strings to datetime objects.
+    start_date_obj = datetime.strptime(start_date, '%Y-%m-%d')
+    # Use an exclusive upper bound for end_date by adding one day.
+    end_date_obj = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+
+    # Use an aggregation pipeline to convert the "date" string to a date object and filter documents.
+    pipeline = [
+        # Convert the "date" field into a date object ("order_date")
+        {
+            "$addFields": {
+                "order_date": {
+                    "$dateFromString": {
+                        "dateString": "$date",
+                        "format": "%d.%m.%Y %H:%M:%S"
+                    }
+                }
+            }
         },
-        'product.0.subwarehouse': subwarehouse  # Фільтруємо за першим продуктом у замовленні
-    }
+        # Filter orders within the given date range and matching the subwarehouse.
+        {
+            "$match": {
+                "order_date": {"$gte": start_date_obj, "$lt": end_date_obj},
+                "subwarehouse": subwarehouse
+            }
+        }
+    ]
 
-    # Проходимо по замовленнях, щоб підрахувати їх загальну кількість і номери
-    for order in orders_collection.find(query):
-        total_orders += 1
-        order_number_list.append(order['order_number_1c'])
+    # Get all matching orders
+    orders = list(orders_collection.aggregate(pipeline))
+    total_orders = len(orders)
 
-    # Відправляємо запит для отримання статусу оплати всіх замовлень
+    # If no orders found, return 0%
+    if total_orders == 0:
+        return 0
+
+    # Collect order numbers (using the "number" field as identifier)
+    order_number_list = [order["number"] for order in orders]
+
+    # Request payment statuses from the external service.
     request_payment = requests.post(
         'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getpaymentstatus',
-        data={"order": order_number_list}, auth=('CRM', 'CegJr6YcK1sTnljgTIly')
+        data={"order": order_number_list},
+        auth=('CRM', 'CegJr6YcK1sTnljgTIly')
     )
 
-    # Розбираємо XML-відповідь
+    # Parse the XML response.
     root = ET.fromstring(request_payment.text)
 
-    # Перебираємо статуси оплати і підраховуємо кількість оплачених замовлень
+    # Count the number of orders with a payment status of "Оплачено".
+    paid_orders = 0
     for payment_status in root.iter('status'):
         if payment_status.text == 'Оплачено':
             paid_orders += 1
 
-    # Обчислюємо відсоток оплачених замовлень
-    paid_percentage = (paid_orders / total_orders) * 100 if total_orders > 0 else 0
-
+    # Calculate the percentage of paid orders.
+    paid_percentage = (paid_orders / total_orders) * 100
     return paid_percentage
 
 
 def analyze_repeat_orders(start_date, end_date, subwarehouse):
-    # Convert start_date and end_date to datetime objects
-    start_date = datetime.strptime(start_date, '%Y-%m-%d')
-    end_date = datetime.strptime(end_date, '%Y-%m-%d')
+    """
+    Analyze repeat orders by counterparty in the given date range and subwarehouse.
 
-    # Initialize dictionary to store counterparties and their repeat order information
-    counterparties = {}
+    The function returns a dictionary mapping each counterparty code to an object
+    containing:
+      - order_count: the number of orders
+      - total_amount: the sum of goods amounts (converted from string to number)
 
-    # Iterate through each day in the given time period
-    current_date = start_date
-    while current_date <= end_date:
-        # Construct query to find orders on the current day
-        query = {
-            'date': {
-                '$gte': current_date.strftime('%Y-%m-%d 00:00:00'),
-                '$lt': (current_date + timedelta(days=1)).strftime('%Y-%m-%d 00:00:00')
-            },
-            'product.0.subwarehouse': subwarehouse
-        }
+    The orders are filtered by converting the stored "date" field (format "dd.mm.yyyy HH:MM:SS")
+    to a date object and comparing it to the provided start_date and end_date (format "yyyy-mm-dd").
 
-        # Analyze orders for repeat counterparties
-        for order in orders_collection.find(query):
-            counterpartie_code = order['counterpartie_code']
-            if counterpartie_code in counterparties:
-                # Update existing counterparty entry
-                counterparties[counterpartie_code]['order_count'] += 1
-                counterparties[counterpartie_code]['total_amount'] += sum(
-                    product['amount'] for product in order['product'])
-            else:
-                # Create new counterparty entry
-                counterparties[counterpartie_code] = {
-                    'order_count': 1,
-                    'total_amount': sum(product['amount'] for product in order['product'])
+    Parameters:
+      start_date (str): Start date in "yyyy-mm-dd" format.
+      end_date   (str): End date in "yyyy-mm-dd" format.
+      subwarehouse (str): Subwarehouse name.
+
+    Returns:
+      dict: A dictionary where keys are counterparty codes and values are dicts with
+            "order_count" and "total_amount".
+    """
+    # Convert input date strings to datetime objects.
+    start_date_obj = datetime.strptime(start_date, '%Y-%m-%d')
+    # Use an exclusive upper bound for the end_date by adding one day.
+    end_date_obj = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
+
+    pipeline = [
+        # 1. Convert the stored "date" field to a proper date object ("order_date").
+        {
+            "$addFields": {
+                "order_date": {
+                    "$dateFromString": {
+                        "dateString": "$date",
+                        "format": "%d.%m.%Y %H:%M:%S"
+                    }
                 }
+            }
+        },
+        # 2. Filter orders by the converted date and by the top-level "subwarehouse" field.
+        {
+            "$match": {
+                "order_date": {"$gte": start_date_obj, "$lt": end_date_obj},
+                "subwarehouse": subwarehouse
+            }
+        },
+        # 3. For each order, compute the total amount by summing the amounts from the "goods" array.
+        #    Each good's "amount" is stored as a string with a comma as the decimal separator.
+        {
+            "$addFields": {
+                "order_total_amount": {
+                    "$sum": {
+                        "$map": {
+                            "input": "$goods",
+                            "as": "g",
+                            "in": {
+                                "$toDouble": {
+                                    "$replaceAll": {
+                                        "input": "$$g.amount",
+                                        "find": ",",
+                                        "replacement": "."
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        # 4. Group orders by counterparty code and accumulate order count and total amount.
+        {
+            "$group": {
+                "_id": "$counterpartie_code",
+                "order_count": {"$sum": 1},
+                "total_amount": {"$sum": "$order_total_amount"}
+            }
+        }
+    ]
 
-        # Move to the next day
-        current_date += timedelta(days=1)
+    results = orders_collection.aggregate(pipeline)
+
+    # Convert the aggregation result into a dictionary.
+    counterparties = {}
+    for doc in results:
+        counterparties[doc["_id"]] = {
+            "order_count": doc["order_count"],
+            "total_amount": doc["total_amount"]
+        }
 
     return counterparties
 
@@ -260,7 +459,7 @@ def calculate_product_rating(start_date, end_date, subwarehouse):
     return sorted_products
 
 
-def get_total_rest_by_warehouse(subwarehouse):
+def get_total_rest_by_warehouse():
     pipeline = [
         {"$match": {"rest": {"$exists": True}}},
         {"$addFields": {
@@ -724,4 +923,3 @@ def pallets_report(subwarehouse):
             pallets_data[counterpartie]["price"] += float(pallet["pallet_total_price"])
 
     return pallets_data
-
