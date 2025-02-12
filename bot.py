@@ -58,16 +58,10 @@ main_menu_markup.row(
     types.KeyboardButton("Піддони")
 )
 
-
 # ------------------ Utility Functions ---------------------- #
 def get_warehouse_data(warehouse_name):
     """
     Fetch and parse XML data from a warehouse.
-
-    :param warehouse_name: 'Етрус' or 'Фастпол'
-    :return: ElementTree root element of the XML response.
-    :raises ValueError: for unknown warehouse name.
-    :raises Exception: if HTTP request fails.
     """
     if warehouse_name == 'Етрус':
         url = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getreportrest'
@@ -126,7 +120,8 @@ def cancel_command(message):
 
 
 # ----------------- Merchandiser Report Handlers ----------------- #
-# Global variables for merchandiser report
+# (For brevity, these handlers remain unchanged.
+#  You can similarly store per-user state in a dictionary keyed by message.from_user.id)
 products = []
 name_shop = ""
 selected_subwarehouse = ""
@@ -136,7 +131,6 @@ price_product = ""
 amount_sale = ""
 price_sale = ""
 photo_base64 = None
-
 
 @bot.message_handler(func=lambda message: message.text == "Звіт мерчандайзера", content_types=['text'])
 def handle_merch_report(message):
@@ -315,22 +309,25 @@ def confirm_merch_report(message):
 # -------------------------------------------------------------------
 # ORDER CREATION HANDLERS (New Order Document Structure)
 # -------------------------------------------------------------------
-# Global dictionary to store order data
-user_data = {}
-
+# Instead of using a single global user_data dictionary, we now store each user’s order data
+# in the orders_data dictionary keyed by their Telegram user ID.
+orders_data = {}
 
 @bot.message_handler(func=lambda message: message.text == "Створити замовлення", content_types=['text'])
 def choose_warehouse(message):
+    user_id = message.from_user.id
+    orders_data[user_id] = {}  # Initialize a new order for this user
     keyboard = types.InlineKeyboardMarkup()
     keyboard.row(
         types.InlineKeyboardButton(text="Етрус", callback_data="warehouse_etrus"),
         types.InlineKeyboardButton(text="Фастпол", callback_data="warehouse_fastpol")
     )
-    bot.send_message(message.from_user.id, 'Оберіть склад:', reply_markup=keyboard)
+    bot.send_message(user_id, 'Оберіть склад:', reply_markup=keyboard)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('warehouse_'))
 def handle_warehouse_selection(call):
+    user_id = call.from_user.id
     if call.data == "warehouse_etrus":
         warehouse_name = 'Етрус'
         warehouse_short = 'e'
@@ -338,12 +335,13 @@ def handle_warehouse_selection(call):
         warehouse_name = 'Фастпол'
         warehouse_short = 'f'
     else:
-        warehouse_name = user_data.get('goods', [{}])[0].get('subwarehouse', '')
+        # Fallback if needed
+        warehouse_name = orders_data.get(user_id, {}).get('goods', [{}])[0].get('subwarehouse', '')
         warehouse_short = 'e' if warehouse_name == 'Етрус' else 'f'
 
     # Store warehouse details for later use
-    user_data['warehouse_name'] = warehouse_name
-    user_data['warehouse_short'] = warehouse_short
+    orders_data[user_id]['warehouse_name'] = warehouse_name
+    orders_data[user_id]['warehouse_short'] = warehouse_short
 
     try:
         root = get_warehouse_data(warehouse_name)
@@ -371,33 +369,36 @@ def handle_warehouse_selection(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('orderproduct'))
 def order_product_callback(call):
+    user_id = call.from_user.id
     parts = call.data.split('_')
     product_code = parts[1]
     warehouse_short = parts[2]
     # Determine subwarehouse from the warehouse short code
     subwarehouse = 'Фастпол' if warehouse_short == 'f' else 'Етрус'
-    # Prepare a product dictionary; note that price and summ will be added later
+    # Prepare a product dictionary; price and summ will be added later
     current_product = {'code': product_code, 'subwarehouse': subwarehouse}
-    msg = bot.send_message(call.from_user.id, "Введіть кількість товару:")
+    msg = bot.send_message(user_id, "Введіть кількість товару:")
     bot.register_next_step_handler(msg, process_order_amount, current_product)
 
 
 def process_order_amount(message, current_product):
+    user_id = message.from_user.id
     if message.text == '/cancel':
         cancel_handler(message)
     else:
-        # Store the amount as entered (we will convert later)
+        # Store the amount as entered (conversion will be done later)
         current_product['amount'] = message.text
         msg = bot.send_message(message.chat.id, "Введіть ціну товару:")
         bot.register_next_step_handler(msg, process_order_price, current_product)
 
 
 def process_order_price(message, current_product):
+    user_id = message.from_user.id
     if message.text == '/cancel':
         cancel_handler(message)
     else:
         try:
-            # Allow both dot and comma as decimal separator
+            # Allow both dot and comma as a decimal separator
             price = float(message.text.replace(',', '.'))
         except ValueError:
             bot.send_message(message.chat.id, "Неправильне значення ціни. Будь ласка, спробуйте ще раз.")
@@ -415,22 +416,23 @@ def process_order_price(message, current_product):
         summ = price * amount
         current_product['summ'] = format(summ, '.2f').replace('.', ',')
 
-        # Initialize goods list in user_data if needed and add this product
-        if 'goods' not in user_data:
-            user_data['goods'] = []
-        user_data['goods'].append(current_product)
+        # Initialize goods list for this user if needed and add this product
+        if 'goods' not in orders_data[user_id]:
+            orders_data[user_id]['goods'] = []
+        orders_data[user_id]['goods'].append(current_product)
 
         msg = bot.send_message(message.chat.id, "Додати ще один продукт? (так/ні)")
         bot.register_next_step_handler(msg, check_order_add_more)
 
 
 def check_order_add_more(message):
+    user_id = message.from_user.id
     if message.text == '/cancel':
         cancel_handler(message)
     elif message.text.strip().lower() == 'так':
         ask_product(message)
     else:
-        msg = bot.send_message(message.from_user.id, 'Введіть коментар до замовлення (або залиште порожнім)')
+        msg = bot.send_message(user_id, 'Введіть коментар до замовлення (або залиште порожнім)')
         bot.register_next_step_handler(msg, process_order_comment)
 
 
@@ -438,8 +440,9 @@ def ask_product(message):
     """
     Re-send the inline keyboard with available products based on the stored warehouse.
     """
-    warehouse_name = user_data.get('warehouse_name')
-    warehouse_short = user_data.get('warehouse_short')
+    user_id = message.from_user.id
+    warehouse_name = orders_data[user_id].get('warehouse_name')
+    warehouse_short = orders_data[user_id].get('warehouse_short')
     try:
         root = get_warehouse_data(warehouse_name)
     except Exception as e:
@@ -456,31 +459,33 @@ def ask_product(message):
                 callback_data=f"orderproduct_{code}_{warehouse_short}"
             )
             keyboard.add(button)
-    bot.send_message(message.from_user.id, 'Виберіть необхідний продукт', reply_markup=keyboard)
+    bot.send_message(user_id, 'Виберіть необхідний продукт', reply_markup=keyboard)
 
 
 def process_order_comment(message):
+    user_id = message.from_user.id
     if message.text == '/cancel':
         cancel_handler(message)
     else:
         # Save comment; if empty string then use None
-        user_data['comment'] = message.text if message.text.strip() != "" else None
+        orders_data[user_id]['comment'] = message.text if message.text.strip() != "" else None
         finalize_order(message)
 
 
 def finalize_order(message):
-    # Generate a (for example) random order number (as a string)
+    user_id = message.from_user.id
+    # Generate a random order number (as a string)
     order_number = str(random.randint(1, 1000))
     now = datetime.now()
     order_date = now.strftime("%d.%m.%Y %H:%M:%S")
 
     # Get buyer from counterparties (using telegramID)
-    counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
+    counterpartie = counterparties_collection.find_one({'telegramID': user_id})
     buyer = counterpartie['code'] if counterpartie and 'code' in counterpartie else ""
 
     # Calculate total from the sum of each good's "summ" value (convert comma to dot)
     total = 0.0
-    for good in user_data.get('goods', []):
+    for good in orders_data[user_id].get('goods', []):
         try:
             total += float(good['summ'].replace(',', '.'))
         except Exception:
@@ -488,7 +493,7 @@ def finalize_order(message):
     total_str = format(total, '.2f').replace('.', ',')
 
     # Determine subwarehouse from the first good in the list
-    subwarehouse = user_data.get('goods', [{}])[0].get('subwarehouse', '')
+    subwarehouse = orders_data[user_id].get('goods', [{}])[0].get('subwarehouse', '')
 
     # Build the new order document according to the new structure
     new_order = {
@@ -496,17 +501,23 @@ def finalize_order(message):
         "date": order_date,
         "buyer": buyer,
         "total": total_str,
-        "comment": user_data.get('comment'),
-        "goods": user_data.get('goods', []),
+        "comment": orders_data[user_id].get('comment'),
+        "goods": orders_data[user_id].get('goods', []),
         "subwarehouse": subwarehouse
     }
 
-    # Save the order document to MongoDB (orders_collection)
+    # Save the order document to MongoDB
     orders_collection.insert_one(new_order)
     bot.send_message(message.chat.id, "Дані успішно надіслано!")
 
+    # Clear the order data for this user
+    orders_data.pop(user_id, None)
+
 
 # ---------------- Manufactured Products Reporting ---------------- #
+# We now use a manufactured_data dictionary keyed by user ID.
+manufactured_data = {}
+
 @bot.message_handler(
     func=lambda message: message.text == "Кількість виробленої продукції",
     content_types=['text']
@@ -522,8 +533,9 @@ def choose_warehouse_for_manufactured(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('manufactured_warehouse_'))
 def ask_manufactured_product(call):
-    global user_data
-    user_data = {'product': []}
+    user_id = call.from_user.id
+    # Initialize this user's manufactured data
+    manufactured_data[user_id] = {'product': []}
 
     if call.data == "manufactured_warehouse_etrus":
         warehouse_name = 'Етрус'
@@ -558,6 +570,7 @@ def ask_manufactured_product(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mp_'))
 def ask_manufactured_amount(call):
+    user_id = call.from_user.id
     parts = call.data.split('_')
     code = parts[1]
     warehouse_short = parts[2]
@@ -576,22 +589,23 @@ def ask_manufactured_amount(call):
             good = product.get('Good')
             break
 
-    msg = bot.send_message(call.from_user.id, 'Введіть кількість виготовленої продукції')
+    msg = bot.send_message(user_id, 'Введіть кількість виготовленої продукції')
     bot.register_next_step_handler(msg, confirm_manufactured_product, code, good, warehouse_name)
 
 
 def confirm_manufactured_product(message, code, good, warehouse_name):
+    user_id = message.from_user.id
     if message.text == '/cancel':
         cancel_handler(message)
         return
     amount = int(message.text)
-    user_data['product'].append({'code': code, 'amount': amount})
-    counterpartie = counterparties_collection.find_one({'telegramID': message.from_user.id})
+    manufactured_data[user_id]['product'].append({'code': code, 'amount': amount})
+    counterpartie = counterparties_collection.find_one({'telegramID': user_id})
     base_web = 'BaseWeb' if warehouse_name == 'Етрус' else 'BaseWeb1'
 
     response = requests.post(
         f'https://olimpia.comp.lviv.ua:8189/{base_web}/hs/base?action=CreateProduction',
-        json=user_data,
+        json=manufactured_data[user_id],
         auth=('CRM', 'CegJr6YcK1sTnljgTIly'),
         verify=False
     )
@@ -611,6 +625,8 @@ def confirm_manufactured_product(message, code, good, warehouse_name):
         bot.send_message(message.chat.id, "Дані успішно надіслано!")
     else:
         bot.send_message(message.from_user.id, 'Помилка надсилання даних')
+    # Optionally, clear this user's manufactured data:
+    manufactured_data.pop(user_id, None)
 
 
 # ----------------- Raw Material Usage Reporting ----------------- #
@@ -629,8 +645,8 @@ def choose_warehouse_for_raw_materials(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('raw_warehouse_'))
 def ask_raw_material(call):
-    global user_data
-    user_data = {'product': []}
+    # For raw materials we do not need to store a per-user state,
+    # so we simply do not use the global user_data here.
     if call.data == "raw_warehouse_etrus":
         warehouse_name = 'Етрус'
         warehouse_short = 'e'
@@ -710,6 +726,8 @@ def process_defect_amount(message, used_amount, raw_code, warehouse_short):
 
 
 # ------------------ Defective Products Reporting ------------------ #
+# (These handlers currently use global variables. For multi-user support,
+#  you should refactor them similarly by storing per-user state in a dictionary.)
 defective_products = []
 
 
@@ -802,6 +820,7 @@ def confirm_defective_products(message):
 
 
 # ---------------------- Pallets Reporting ---------------------- #
+# (These handlers also use global variables; consider refactoring to a per-user dictionary if needed.)
 pallets = []
 counterpartie_name = ""
 pallet_amount_value = ""
