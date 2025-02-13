@@ -1066,9 +1066,9 @@ def order_info():
         return response
 
 
-def insert_order_data_from_url():
-    url1 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getorders&datefrom=20000101'
-    url2 = 'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getorders&datefrom=20000101'
+def insert_order_data_from_url(start_date, end_date):
+    url1 = f'https://olimpia.comp.lviv.ua:8189/BaseWeb/hs/base?action=getorders&datefrom={start_date.replace("-", "")}&dateto={end_date.replace("-", "")}'
+    url2 = f'https://olimpia.comp.lviv.ua:8189/BaseWeb1/hs/base?action=getorders&datefrom={start_date.replace("-", "")}&dateto={end_date.replace("-", "")}'
 
     username = 'CRM'
     password = 'CegJr6YcK1sTnljgTIly'
@@ -1142,9 +1142,6 @@ def insert_order_data_from_url():
 
 @application.route('/orders', methods=['POST'])
 def orders():
-    # Insert data from the URLs into MongoDB
-    insert_order_data_from_url()
-
     data = request.get_json()
     access_token = data.get('access_token')
     if check_token(access_token) is False:
@@ -1153,6 +1150,11 @@ def orders():
     keyword = data.get('keyword')
     page = data.get('page', 1)
     per_page = data.get('per_page', 10)
+    start_date = data.get('start_date')
+    end_date = data.get('end_date')
+
+    # Insert data from the URLs into MongoDB
+    insert_order_data_from_url(start_date, end_date)
 
     filter_criteria = {}
     if keyword:
