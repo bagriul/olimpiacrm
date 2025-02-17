@@ -1144,42 +1144,54 @@ def insert_order_data_from_url(start_date, end_date):
 def orders():
     data = request.get_json()
     access_token = data.get('access_token')
-    if check_token(access_token) is False:
+    if not check_token(access_token):
         return jsonify({'token': False}), 401
 
     keyword = data.get('keyword')
     page = data.get('page', 1)
     per_page = data.get('per_page', 10)
-    start_date = data.get('start_date')
-    end_date = data.get('end_date')
-
-    # Insert data from the URLs into MongoDB
-    insert_order_data_from_url(start_date, end_date)
+    start_date = data.get('start_date', (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"))
+    end_date = data.get('end_date', datetime.now().strftime("%Y-%m-%d"))
 
     filter_criteria = {}
+
+    # Filter by date range
+    if start_date and end_date:
+        start_date = datetime.strptime(start_date, "%Y-%m-%d")
+        end_date = datetime.strptime(end_date, "%Y-%m-%d")
+
+        filter_criteria['date'] = {
+            '$gte': start_date,
+            '$lte': end_date
+        }
+
+    # Full-text search if keyword is provided
     if keyword:
-        orders_collection.create_index([("$**", "text")])
         filter_criteria['$text'] = {'$search': keyword}
 
     total_orders = orders_collection.count_documents(filter_criteria)
     total_pages = math.ceil(total_orders / per_page)
-
-    # Paginate the query results using skip and limit, and apply filters
     skip = (page - 1) * per_page
+
     documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page))
     for document in documents:
         document['_id'] = str(document['_id'])
 
-    # Calculate the range being displayed
     start_range = skip + 1
     end_range = min(skip + per_page, total_orders)
 
-    # Serialize the documents using json_util from pymongo and specify encoding
-    response = Response(json_util.dumps(
-        {'orders': documents, 'total_orders': total_orders, 'start_range': start_range, 'end_range': end_range,
-         'total_pages': total_pages},
-        ensure_ascii=False).encode('utf-8'),
-                        content_type='application/json;charset=utf-8')
+    response_data = {
+        'orders': documents,
+        'total_orders': total_orders,
+        'start_range': start_range,
+        'end_range': end_range,
+        'total_pages': total_pages
+    }
+
+    response = Response(
+        json_util.dumps(response_data, ensure_ascii=False).encode('utf-8'),
+        content_type='application/json;charset=utf-8'
+    )
     return response
 
 
