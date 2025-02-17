@@ -1150,39 +1150,72 @@ def orders():
     keyword = data.get('keyword')
     page = data.get('page', 1)
     per_page = data.get('per_page', 10)
-    start_date = data.get('start_date', (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"))
-    end_date = data.get('end_date', datetime.now().strftime("%Y-%m-%d"))
-
-    filter_criteria = {}
     
-    # Convert request date format to MongoDB date format
+    # Convert request date strings to datetime objects with proper time boundaries.
     try:
-        start_date = datetime.strptime(start_date, "%Y-%m-%d").strftime("%d.%m.%Y 00:00:00")
-        end_date = datetime.strptime(end_date, "%Y-%m-%d").strftime("%d.%m.%Y 23:59:59")
+        start_date_str = data.get('start_date', (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"))
+        end_date_str = data.get('end_date', datetime.now().strftime("%Y-%m-%d"))
+        # For filtering, we want the full day range.
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d") + timedelta(hours=23, minutes=59, seconds=59)
     except ValueError:
-        return jsonify({'error': 'Invalid date format'}), 400
+        return jsonify({'error': 'Invalid date format. Expected format: YYYY-MM-DD'}), 400
 
-    # Filter by date range
-    filter_criteria['date'] = {
-        '$gte': start_date,
-        '$lte': end_date
+    # Build the aggregation pipeline.
+    pipeline = []
+    
+    # Convert the stored date string to a datetime field.
+    pipeline.append({
+        "$addFields": {
+            "date_datetime": {
+                "$dateFromString": {
+                    "dateString": "$date",
+                    "format": "%d.%m.%Y %H:%M:%S"
+                }
+            }
+        }
+    })
+    
+    # Create match criteria for the date range.
+    match_criteria = {
+        "date_datetime": {
+            "$gte": start_date,
+            "$lte": end_date
+        }
     }
-
-    # Full-text search if keyword is provided
+    
+    # Add full-text search if a keyword is provided.
     if keyword:
-        filter_criteria['$text'] = {'$search': keyword}
+        match_criteria["$text"] = {"$search": keyword}
+    
+    pipeline.append({"$match": match_criteria})
+    
+    # First, get total count using a count stage.
+    count_pipeline = pipeline + [{"$count": "total"}]
+    count_result = list(orders_collection.aggregate(count_pipeline))
+    total_orders = count_result[0]["total"] if count_result else 0
+    total_pages = math.ceil(total_orders / per_page) if per_page else 1
 
-    total_orders = orders_collection.count_documents(filter_criteria)
-    total_pages = math.ceil(total_orders / per_page)
     skip = (page - 1) * per_page
-
-    documents = list(orders_collection.find(filter_criteria).skip(skip).limit(per_page))
+    
+    # Add pagination stages.
+    pipeline.extend([
+        {"$skip": skip},
+        {"$limit": per_page}
+    ])
+    
+    # Execute the aggregation pipeline.
+    documents = list(orders_collection.aggregate(pipeline))
+    
+    # Convert ObjectIds to strings.
     for document in documents:
         document['_id'] = str(document['_id'])
-
-    start_range = skip + 1
+        # Optionally, remove the temporary "date_datetime" field if not needed.
+        document.pop("date_datetime", None)
+    
+    start_range = skip + 1 if total_orders > 0 else 0
     end_range = min(skip + per_page, total_orders)
-
+    
     response_data = {
         'orders': documents,
         'total_orders': total_orders,
@@ -1190,7 +1223,7 @@ def orders():
         'end_range': end_range,
         'total_pages': total_pages
     }
-
+    
     response = Response(
         json_util.dumps(response_data, ensure_ascii=False).encode('utf-8'),
         content_type='application/json;charset=utf-8'
