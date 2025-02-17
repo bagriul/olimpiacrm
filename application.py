@@ -1161,8 +1161,15 @@ def orders():
     except ValueError:
         return jsonify({'error': 'Invalid date format. Expected format: YYYY-MM-DD'}), 400
 
-    # Build the aggregation pipeline.
     pipeline = []
+    
+    # If keyword search is provided, add the $match with $text as the first stage.
+    if keyword:
+        pipeline.append({
+            "$match": {
+                "$text": {"$search": keyword}
+            }
+        })
     
     # Convert the stored date string to a datetime field.
     pipeline.append({
@@ -1176,21 +1183,17 @@ def orders():
         }
     })
     
-    # Create match criteria for the date range.
-    match_criteria = {
-        "date_datetime": {
-            "$gte": start_date,
-            "$lte": end_date
+    # Now filter documents based on the date range.
+    pipeline.append({
+        "$match": {
+            "date_datetime": {
+                "$gte": start_date,
+                "$lte": end_date
+            }
         }
-    }
+    })
     
-    # Add full-text search if a keyword is provided.
-    if keyword:
-        match_criteria["$text"] = {"$search": keyword}
-    
-    pipeline.append({"$match": match_criteria})
-    
-    # First, get total count using a count stage.
+    # Create a separate pipeline for counting the total orders.
     count_pipeline = pipeline + [{"$count": "total"}]
     count_result = list(orders_collection.aggregate(count_pipeline))
     total_orders = count_result[0]["total"] if count_result else 0
@@ -1207,10 +1210,9 @@ def orders():
     # Execute the aggregation pipeline.
     documents = list(orders_collection.aggregate(pipeline))
     
-    # Convert ObjectIds to strings.
+    # Convert ObjectIds to strings and optionally remove the temporary "date_datetime" field.
     for document in documents:
         document['_id'] = str(document['_id'])
-        # Optionally, remove the temporary "date_datetime" field if not needed.
         document.pop("date_datetime", None)
     
     start_range = skip + 1 if total_orders > 0 else 0
