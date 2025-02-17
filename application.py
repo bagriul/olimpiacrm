@@ -1167,7 +1167,7 @@ def orders():
     if keyword:
         pipeline.append({
             "$match": {
-                "$text": {"$search": keyword}
+                "$comment": {"$search": keyword}
             }
         })
     
