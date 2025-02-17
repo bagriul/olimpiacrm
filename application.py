@@ -1154,16 +1154,19 @@ def orders():
     end_date = data.get('end_date', datetime.now().strftime("%Y-%m-%d"))
 
     filter_criteria = {}
+    
+    # Convert request date format to MongoDB date format
+    try:
+        start_date = datetime.strptime(start_date, "%Y-%m-%d").strftime("%d.%m.%Y 00:00:00")
+        end_date = datetime.strptime(end_date, "%Y-%m-%d").strftime("%d.%m.%Y 23:59:59")
+    except ValueError:
+        return jsonify({'error': 'Invalid date format'}), 400
 
     # Filter by date range
-    if start_date and end_date:
-        start_date = datetime.strptime(start_date, "%Y-%m-%d")
-        end_date = datetime.strptime(end_date, "%Y-%m-%d")
-
-        filter_criteria['date'] = {
-            '$gte': start_date,
-            '$lte': end_date
-        }
+    filter_criteria['date'] = {
+        '$gte': start_date,
+        '$lte': end_date
+    }
 
     # Full-text search if keyword is provided
     if keyword:
