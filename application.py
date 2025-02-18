@@ -1148,21 +1148,21 @@ def orders():
         return jsonify({'token': False}), 401
 
     keyword = data.get('keyword')
+    subwarehouse = data.get('subwarehouse')  # Optional filter by subwarehouse
     page = data.get('page', 1)
     per_page = data.get('per_page', 10)
-    
+
     # Convert request date strings to datetime objects with proper time boundaries.
     try:
         start_date_str = data.get('start_date', (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"))
         end_date_str = data.get('end_date', datetime.now().strftime("%Y-%m-%d"))
-        # For filtering, we want the full day range.
         start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
         end_date = datetime.strptime(end_date_str, "%Y-%m-%d") + timedelta(hours=23, minutes=59, seconds=59)
     except ValueError:
         return jsonify({'error': 'Invalid date format. Expected format: YYYY-MM-DD'}), 400
 
     pipeline = []
-    
+
     # If keyword search is provided, add the $match with $text as the first stage.
     if keyword:
         pipeline.append({
@@ -1170,7 +1170,7 @@ def orders():
                 "$comment": {"$search": keyword}
             }
         })
-    
+
     # Convert the stored date string to a datetime field.
     pipeline.append({
         "$addFields": {
@@ -1182,17 +1182,21 @@ def orders():
             }
         }
     })
-    
-    # Now filter documents based on the date range.
-    pipeline.append({
-        "$match": {
-            "date_datetime": {
-                "$gte": start_date,
-                "$lte": end_date
-            }
+
+    # Build the match criteria for date range and, if provided, subwarehouse.
+    match_filter = {
+        "date_datetime": {
+            "$gte": start_date,
+            "$lte": end_date
         }
+    }
+    if subwarehouse:
+        match_filter["subwarehouse"] = subwarehouse
+
+    pipeline.append({
+        "$match": match_filter
     })
-    
+
     # Create a separate pipeline for counting the total orders.
     count_pipeline = pipeline + [{"$count": "total"}]
     count_result = list(orders_collection.aggregate(count_pipeline))
@@ -1200,24 +1204,24 @@ def orders():
     total_pages = math.ceil(total_orders / per_page) if per_page else 1
 
     skip = (page - 1) * per_page
-    
+
     # Add pagination stages.
     pipeline.extend([
         {"$skip": skip},
         {"$limit": per_page}
     ])
-    
+
     # Execute the aggregation pipeline.
     documents = list(orders_collection.aggregate(pipeline))
-    
+
     # Convert ObjectIds to strings and optionally remove the temporary "date_datetime" field.
     for document in documents:
         document['_id'] = str(document['_id'])
         document.pop("date_datetime", None)
-    
+
     start_range = skip + 1 if total_orders > 0 else 0
     end_range = min(skip + per_page, total_orders)
-    
+
     response_data = {
         'orders': documents,
         'total_orders': total_orders,
@@ -1225,7 +1229,7 @@ def orders():
         'end_range': end_range,
         'total_pages': total_pages
     }
-    
+
     response = Response(
         json_util.dumps(response_data, ensure_ascii=False).encode('utf-8'),
         content_type='application/json;charset=utf-8'
