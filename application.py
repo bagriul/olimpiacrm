@@ -1149,6 +1149,7 @@ def orders():
 
     keyword = data.get('keyword')
     subwarehouse = data.get('subwarehouse')  # Optional filter by subwarehouse
+    sort = data.get('sort')
     page = data.get('page', 1)
     per_page = data.get('per_page', 10)
 
@@ -1192,6 +1193,8 @@ def orders():
     }
     if subwarehouse:
         match_filter["subwarehouse"] = subwarehouse
+    if sort:
+        match_filter["sort"] = sort
 
     pipeline.append({
         "$match": match_filter
